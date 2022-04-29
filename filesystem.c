@@ -8,13 +8,20 @@
 // number of entries = number of inodes = number of files
 #define NUM_FILES 800
 #define NUM_BYTES_PER_ADDRESS 4
+#define MAX_FILE_SIZE 71680
+#define MAX_BLOCKS 140
 
 // DIR SPECS
 #define ENTRY_SIZE 64
 #define NUM_BYTES_PER_FILENO 3
 
 // INODE SPECS
+// structure of 1 inode
+// |--size(7byte)--|--blocks(5bytes)--|--12_direct_blocks(12*4)--|--1_single_indirect(1*4)--|
+// TOTAL 64 bytes
 #define INODE_SIZE 64
+#define NUM_BYTES_FOR_SIZE 7
+#define NUM_BYTES_FOR_BLOCKS 5
 #define NUM_DIRECT_BLOCK 12
 #define NUM_SINGLE_INDIRECT 1
 
@@ -90,11 +97,23 @@ int num_used_inodes();
 // delete an inode at index
 int delete_inode(int index);
 
-// add an empty inode
-int add_inode();
+// add an empty inode at index
+int add_inode(int index);
 
 // print inode at index
 void print_inode(int index);
+
+// return the size of file with given inode
+int get_size_in_inode(char *inode_data);
+
+// set the size of file to given inode
+int set_size_in_inode(char *inode_data, int size);
+
+// return the number of blocks with given inode
+int get_blocks_in_inode(char *inode_data);
+
+// set the number of blocks to given inode
+int set_blocks_in_inode(char *inode_data, int blocks);
 
 typedef struct BitMap
 {
@@ -219,7 +238,8 @@ int get_entry(char *filename)
             strncpy(entry_name, dir.entries[i], number);
             if (!(strcmp(filename, entry_name)))
             {
-                char index[NUM_BYTES_PER_FILENO];
+                char index[NUM_BYTES_PER_FILENO + 1];
+                index[NUM_BYTES_PER_FILENO] = '\0';
                 for (int j = 0; j < NUM_BYTES_PER_FILENO; j++)
                 {
                     index[j] = dir.entries[i][ENTRY_SIZE - NUM_BYTES_PER_FILENO + j];
@@ -239,33 +259,21 @@ int num_used_entries()
 int delete_entry(int index)
 {
     int success = 0;
-    if (index >= 0 && index < dir.size)
+    if (index >= 0 && index < NUM_FILES)
     {
-        // get pointer to the last entry
-        char *last_entry = dir.entries[dir.size - 1];
-
-        // copy last entry filename to the deleted entry filename
-        for (int i = 0; i < ENTRY_SIZE - NUM_BYTES_PER_FILENO; i++)
+        for (int i = 0; i < ENTRY_SIZE; i++)
         {
-            dir.entries[index][i] = last_entry[i];
+            dir.entries[index][i] = '\0';
         }
-
-        // copy index to file number of the entry
-        last_entry = last_entry + (ENTRY_SIZE - NUM_BYTES_PER_FILENO);
-        sprintf(last_entry, "%d", index);
-
-        // delete associated inode
-        success = delete_inode(index);
-
-        // mark last entry invalid
-        last_entry[0] = '\0';
 
         // update size
         dir.size--;
-        return success;
+
+        success = delete_inode(index);
+        if (success)
+            success = write_entry_to_disk(index);
     }
-    else
-        return success;
+    return success;
 }
 
 int add_entry(char *filename)
@@ -276,7 +284,13 @@ int add_entry(char *filename)
         // check for illegal file name
         if (filename[0] != '\0')
         {
-            int index = dir.size;
+            int index = 0;
+
+            for (; index < NUM_FILES; index++)
+            {
+                if (dir.entries[index][0] == '\0')
+                    break;
+            }
 
             // copy filename
             strncpy(dir.entries[index], filename, ENTRY_SIZE - NUM_BYTES_PER_FILENO);
@@ -287,14 +301,13 @@ int add_entry(char *filename)
             sprintf(fileno, "%d", index);
 
             // create new inode associated to entry
-            add_inode();
+            add_inode(index);
 
             // increase size
             dir.size++;
 
-            // write entry and inode to disk
+            // write entry to disk
             write_entry_to_disk(index);
-            write_inode_to_disk(index);
 
             return index;
         }
@@ -415,36 +428,41 @@ int write_inode(char *data, int index)
 
 int delete_inode(int index)
 {
-    if (index < inodes.size && index >= 0)
-    { // copy the last inode to the postion of deleted inode, then update size
-        char *last_node = inodes.list_inodes[inodes.size - 1];
+    int success = 0;
+    if (index < NUM_FILES && index >= 0)
+    {
         for (int i = 0; i < INODE_SIZE; i++)
         {
-            inodes.list_inodes[index][i] = last_node[i];
+            inodes.list_inodes[index][i] = '\0';
         }
-        // mark last_node as invalid
-        last_node[0] = '\0';
 
         // update size
         inodes.size--;
-        return 1;
+
+        success = write_inode_to_disk(index);
     }
-    else
-        return 0;
+    return success;
 }
 
-int add_inode()
+int add_inode(int index)
 {
-    if (inodes.size < NUM_FILES)
+    int success = 0;
+    if (index >= 0 && index < NUM_FILES)
     {
-        int index = inodes.size;
-        inodes.size++;
-        inodes.list_inodes[index][0] = '0';
-        inodes.list_inodes[index][1] = '0';
-        return 1;
+        if (inodes.size < NUM_FILES)
+        {
+            // check if at index is active inode or not
+            if (inodes.list_inodes[index][0] == '\0')
+            {
+                inodes.list_inodes[index][0] = '0';
+                inodes.list_inodes[index][1] = '0';
+                inodes.size++;
+                write_inode_to_disk(index);
+                success = 1;
+            }
+        }
     }
-    else
-        return 0;
+    return success;
 }
 
 void print_inode(int index)
@@ -463,6 +481,68 @@ int init_inodes()
     inodes.num_inodes_per_block = SOFTWARE_DISK_BLOCK_SIZE / INODE_SIZE;    // 8
     inodes.num_blocks_for_inodes = NUM_FILES / inodes.num_inodes_per_block; // 100
     int success = load_inodes_from_disk();
+    return success;
+}
+
+int get_size_in_inode(char *inode_data)
+{
+    char size[NUM_BYTES_FOR_SIZE + 1];
+    size[NUM_BYTES_FOR_SIZE] = '\0';
+    for (int i = 0; i < NUM_BYTES_FOR_SIZE; i++)
+    {
+        size[i] = inode_data[i];
+    }
+    return atoi(size);
+}
+
+int set_size_in_inode(char *inode_data, int size)
+{
+    int success = 0;
+    if (size <= MAX_FILE_SIZE)
+    {
+        char filesize[NUM_BYTES_FOR_SIZE];
+        for (int i = 0; i < NUM_BYTES_FOR_SIZE; i++)
+        {
+            filesize[i] = '\0';
+        }
+        sprintf(filesize, "%d", size);
+        for (int i = 0; i < NUM_BYTES_FOR_SIZE; i++)
+        {
+            inode_data[i] = filesize[i];
+        }
+        success = 1;
+    }
+    return success;
+}
+
+int get_blocks_in_inode(char *inode_data)
+{
+    char blockno[NUM_BYTES_FOR_BLOCKS + 1];
+    blockno[NUM_BYTES_FOR_BLOCKS] = '\0';
+    for (int i = 0; i < NUM_BYTES_FOR_BLOCKS; i++)
+    {
+        blockno[i] = inode_data[i + NUM_BYTES_FOR_SIZE];
+    }
+    return atoi(blockno);
+}
+
+int set_blocks_in_inode(char *inode_data, int blocks)
+{
+    int success = 0;
+    if (blocks <= MAX_BLOCKS)
+    {
+        char blockno[NUM_BYTES_FOR_BLOCKS];
+        for (int i = 0; i < NUM_BYTES_FOR_BLOCKS; i++)
+        {
+            blockno[i] = '\0';
+        }
+        sprintf(blockno, "%d", blocks);
+        for (int i = 0; i < NUM_BYTES_FOR_BLOCKS; i++)
+        {
+            inode_data[i + NUM_BYTES_FOR_SIZE] = blockno[i];
+        }
+        success = 1;
+    }
     return success;
 }
 
@@ -649,6 +729,16 @@ File create_file(char *name)
         return created_file;
     }
     return NULL;
+}
+
+void close_file(File file)
+{
+    free(file);
+    fserror = FS_NONE;
+}
+
+unsigned long read_file(File file, void *buf, unsigned long numbytes)
+{
 }
 
 void fs_print_error(void)

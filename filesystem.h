@@ -131,6 +131,18 @@ int add_inode();
 // print inode at index
 void print_inode(int index);
 
+// return the size of file with given inode
+int get_size_in_inode(char *inode_data);
+
+// set the size of file to given inode
+int set_size_in_inode(char *inode_data, int size);
+
+// return the number of blocks with given inode
+int get_blocks_in_inode(char *inode_data);
+
+// set the number of blocks to given inode
+int set_blocks_in_inode(char *inode_data, int blocks);
+
 //////// BITMAP OPERATIONS ////////////
 
 // write bitmap to disk
