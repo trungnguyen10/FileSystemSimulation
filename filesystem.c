@@ -21,13 +21,13 @@
 // DEFINITION OF STRUCTS
 
 // main private file type: you implement this in filesystem.c
-struct FileInternals
+typedef struct FileInternals
 {
     unsigned long file_no;
     unsigned long cur_pos;
     unsigned long eof_pos; // COULD BE IN INODES
     FileMode mode;
-};
+} FileInternals;
 
 typedef struct DirStruct
 {
@@ -38,6 +38,29 @@ typedef struct DirStruct
     char entries[NUM_FILES][ENTRY_SIZE];
 } DirStruct;
 
+//////// DIR OPERATIONS ////////////
+
+// load the corresponding blocks from disk into the DIR structure
+int load_dir_from_disk();
+
+// write an entry at specified index to disk
+int write_entry_to_disk(int index);
+
+// get entry with the given filename, return the index of entry(inode), return -1 when not found
+int get_entry(char *filename);
+
+// return the number of used entry
+int num_used_entries();
+
+// delete an entry at index
+int delete_entry(int index);
+
+// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename
+int add_entry(char *filename);
+
+// print entry at index
+void print_entry(int index);
+
 typedef struct InodesStruct
 {
     int start_block;
@@ -47,6 +70,32 @@ typedef struct InodesStruct
     char list_inodes[NUM_FILES][INODE_SIZE];
 } InodesStruct;
 
+//////// INODES OPERATIONS ////////////
+
+// load the corresponding blocks from disk into the inodes structure
+int load_inodes_from_disk();
+
+// write an inode at specified index to disk
+int write_inode_to_disk(int index);
+
+// load the content of the inode at index into buf
+int read_inode(char *buf, int index);
+
+// write data to inode at index
+int write_inode(char *data, int index);
+
+// return the number of used inodes
+int num_used_inodes();
+
+// delete an inode at index
+int delete_inode(int index);
+
+// add an empty inode
+int add_inode();
+
+// print inode at index
+void print_inode(int index);
+
 typedef struct BitMap
 {
     int start_block;
@@ -54,6 +103,23 @@ typedef struct BitMap
     int size;
     char map[SOFTWARE_DISK_BLOCK_SIZE];
 } BitMap;
+
+//////// BITMAP OPERATIONS ////////////
+
+// write bitmap to disk
+int write_bitmap_to_disk();
+
+// load the corresponding block from disk to the bitmap structure
+int load_bitmap_from_disk();
+
+// free the disk block at index
+int free_block(int index);
+
+// set the disk block at index
+int set_block(int index);
+
+// return index of a free block, return -1 when disk is full
+int get_free_block();
 
 // GLOBALS
 // intance of directory
@@ -87,9 +153,7 @@ void print_specs()
     printf("bitmap size %d\n", bitmap.size);
 }
 
-////////////// DIR OPERATIONS //////////////
-
-// load the corresponding blocks from disk into the DIR structure
+////////////// DIR OPERATIONS DEFINITION //////////////
 int load_dir_from_disk()
 {
     char buf[SOFTWARE_DISK_BLOCK_SIZE];
@@ -117,7 +181,6 @@ int load_dir_from_disk()
     return success;
 }
 
-// write an entry at specified index to disk
 int write_entry_to_disk(int index)
 {
     int success = 0;
@@ -143,7 +206,6 @@ int write_entry_to_disk(int index)
     return success;
 }
 
-// get entry with the given filename, return the index of entry(or inode), return -1 when not found
 int get_entry(char *filename)
 {
     if (dir.size == 0)
@@ -169,13 +231,11 @@ int get_entry(char *filename)
     }
 }
 
-// return the number of used entry
 int num_used_entries()
 {
     return dir.size;
 }
 
-// delete an entry at index
 int delete_entry(int index)
 {
     int success = 0;
@@ -208,34 +268,45 @@ int delete_entry(int index)
         return success;
 }
 
-// add an new entry with given filename
 int add_entry(char *filename)
 {
-    int success = 0;
+    int success = -1;
     if (dir.size < NUM_FILES)
     {
-        int index = dir.size;
+        // check for illegal file name
+        if (filename[0] != '\0')
+        {
+            int index = dir.size;
 
-        // copy filename
-        strncpy(dir.entries[index], filename, ENTRY_SIZE - NUM_BYTES_PER_FILENO);
+            // copy filename
+            strncpy(dir.entries[index], filename, ENTRY_SIZE - NUM_BYTES_PER_FILENO);
 
-        // copy file number
-        char *fileno = dir.entries[index];
-        fileno = fileno + (ENTRY_SIZE - NUM_BYTES_PER_FILENO);
-        sprintf(fileno, "%d", index);
+            // copy file number
+            char *fileno = dir.entries[index];
+            fileno = fileno + (ENTRY_SIZE - NUM_BYTES_PER_FILENO);
+            sprintf(fileno, "%d", index);
 
-        // create new inode associated to entry
-        success = add_inode();
+            // create new inode associated to entry
+            add_inode();
 
-        // increase size
-        dir.size++;
-        return success;
+            // increase size
+            dir.size++;
+
+            // write entry and inode to disk
+            write_entry_to_disk(index);
+            write_inode_to_disk(index);
+
+            return index;
+        }
+        else
+            fserror = FS_ILLEGAL_FILENAME;
     }
     else
-        return success;
+        fserror = FS_OUT_OF_SPACE;
+
+    return success;
 }
 
-// print entry at index
 void print_entry(int index)
 {
     for (int i = 0; i < ENTRY_SIZE; i++)
@@ -245,7 +316,7 @@ void print_entry(int index)
     printf("\n");
 }
 
-// init Dir structure
+// init dir structure
 int init_dir()
 {
     dir.start_block = 0;
@@ -255,9 +326,8 @@ int init_dir()
     return success;
 }
 
-////////////// INODES OPERATIONS //////////////
+////////////// INODES OPERATIONS DEFINITION //////////////
 
-// load the corresponding blocks from disk into the inodes structure
 int load_inodes_from_disk()
 {
     char buf[SOFTWARE_DISK_BLOCK_SIZE];
@@ -285,7 +355,6 @@ int load_inodes_from_disk()
     return success;
 }
 
-// load the content of the inode at index into buf
 int read_inode(char *buf, int index)
 {
     if (index < inodes.size && index >= 0)
@@ -300,13 +369,11 @@ int read_inode(char *buf, int index)
         return 0;
 }
 
-// return the number of used inodes
 int num_used_inodes()
 {
     return inodes.size;
 }
 
-// write an inode at specified index to disk
 int write_inode_to_disk(int index)
 {
     int success = 0;
@@ -332,7 +399,6 @@ int write_inode_to_disk(int index)
     return success;
 }
 
-// write data to inode at index
 int write_inode(char *data, int index)
 {
     if (index < inodes.size && index >= 0)
@@ -347,7 +413,6 @@ int write_inode(char *data, int index)
         return 0;
 }
 
-// delete an inode at index
 int delete_inode(int index)
 {
     if (index < inodes.size && index >= 0)
@@ -368,7 +433,6 @@ int delete_inode(int index)
         return 0;
 }
 
-// add an empty inode
 int add_inode()
 {
     if (inodes.size < NUM_FILES)
@@ -383,7 +447,6 @@ int add_inode()
         return 0;
 }
 
-// print inode at index
 void print_inode(int index)
 {
     for (int i = 0; i < INODE_SIZE; i++)
@@ -403,7 +466,7 @@ int init_inodes()
     return success;
 }
 
-////////////// BITMAP OPERATIONS //////////////
+////////////// BITMAP OPERATIONS DEFINITION //////////////
 
 // set bit k_th in bitmap.map
 void set_bit(int k)
@@ -426,7 +489,6 @@ void clear_bit(int k)
     bitmap.map[i] = bitmap.map[i] & flag;
 }
 
-// free the disk block at index
 int free_block(int index)
 {
     if (index > bitmap.start_block && index <= bitmap.max_block)
@@ -438,7 +500,6 @@ int free_block(int index)
     return 0;
 }
 
-// set the disk block at index
 int set_block(int index)
 {
     if (index > bitmap.start_block && index <= bitmap.max_block)
@@ -450,7 +511,6 @@ int set_block(int index)
     return 0;
 }
 
-// get free block, return -1 when disk is full
 int get_free_block()
 {
     const int WORD_SIZE = 8;
@@ -480,20 +540,18 @@ int get_free_block()
             break;
     }
 
-    int block_numbner = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block - 1;
-    if (block_numbner > 4999)
+    int block_number = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block - 1;
+    if (block_number > 4999)
         return -1;
     else
-        return block_numbner;
+        return block_number;
 }
 
-// write bitmap to disk
 int write_bitmap_to_disk()
 {
     return write_sd_block(bitmap.map, (unsigned long)bitmap.start_block);
 }
 
-// load the corresponding block from disk to the bitmap structure
 int load_bitmap_from_disk()
 {
     return read_sd_block(bitmap.map, (unsigned long)bitmap.start_block);
@@ -550,4 +608,81 @@ void init_fs()
     success = init_bitmap();
     if (!success)
         printf("Something wrong with bitmap init!\n");
+}
+
+File open_file(char *name, FileMode mode)
+{
+    int f_no = get_entry(name);
+    if (f_no == -1)
+    {
+        fserror = FS_FILE_NOT_FOUND;
+        return NULL;
+    }
+    else
+    {
+        fserror = FS_NONE;
+        FileInternals *opened_file = malloc(sizeof(struct FileInternals));
+        opened_file->file_no = f_no;
+        opened_file->cur_pos = 0;
+        opened_file->mode = mode;
+        return opened_file;
+    }
+}
+
+File create_file(char *name)
+{
+    // check filename already exsit
+    int ret = get_entry(name);
+    if (ret != -1)
+    {
+        fserror = FS_FILE_ALREADY_EXISTS;
+        return NULL;
+    }
+    int f_no = add_entry(name);
+    if (f_no != -1)
+    {
+        fserror = FS_NONE;
+        FileInternals *created_file = malloc(sizeof(struct FileInternals));
+        created_file->file_no = f_no;
+        created_file->cur_pos = 0;
+        created_file->mode = READ_WRITE;
+        return created_file;
+    }
+    return NULL;
+}
+
+void fs_print_error(void)
+{
+    switch (fserror)
+    {
+    case FS_NONE:
+        printf("Filesystem is working properly.\n");
+        break;
+    case FS_OUT_OF_SPACE:
+        printf("The operation caused the software disk to fill up\n");
+        break;
+    case FS_FILE_NOT_OPEN:
+        printf("attempted read/write/close/etc. on file that isn't open.\n");
+        break;
+    case FS_FILE_OPEN:
+        printf("file is already open. Concurrent opens are not supported and neither is deleting a file that is open.\n");
+        break;
+    case FS_FILE_NOT_FOUND:
+        printf("attempted open or delete of file that doesn't exist.\n");
+        break;
+    case FS_FILE_READ_ONLY:
+        printf("attempted write to file opened for READ_ONLY.\n");
+        break;
+    case FS_FILE_ALREADY_EXISTS:
+        printf("attempted creation of file with existing name.\n");
+        break;
+    case FS_EXCEEDS_MAX_FILE_SIZE:
+        printf("seek or write would exceed max file size.\n");
+        break;
+    case FS_ILLEGAL_FILENAME:
+        printf("filename begins with a null character\n");
+        break;
+    default:
+        printf("something really bad happened.\n");
+    }
 }

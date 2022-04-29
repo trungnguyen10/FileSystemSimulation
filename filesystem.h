@@ -100,7 +100,7 @@ int num_used_entries();
 // delete an entry at index
 int delete_entry(int index);
 
-// add an new entry with given filename
+// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename
 int add_entry(char *filename);
 
 // print entry at index
@@ -145,5 +145,5 @@ int free_block(int index);
 // set the disk block at index
 int set_block(int index);
 
-// get free block, return -1 when disk is full
+// return index of a free block, return -1 when disk is full
 int get_free_block();
