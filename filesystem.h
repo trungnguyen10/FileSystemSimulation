@@ -134,14 +134,26 @@ void print_inode(int index);
 // return the size of file with given inode
 int get_size_in_inode(char *inode_data);
 
-// set the size of file to given inode
+// set the size of file to given inode, return 1 for success, 0 for error
 int set_size_in_inode(char *inode_data, int size);
 
 // return the number of blocks with given inode
 int get_blocks_in_inode(char *inode_data);
 
-// set the number of blocks to given inode
+// set the number of blocks to given inode, return 1 for success, 0 for error
 int set_blocks_in_inode(char *inode_data, int blocks);
+
+// return the block number with given inode and direct block(0-11), return -1 for error
+int get_block_num(char *inode_data, int direct_block);
+
+// set the block number at specified direct block with given inode, return 1 for success, 0 for error
+int set_block_num(char *inode_data, int direct_block, int num);
+
+// return the block number with given block and index(0-127: use in single indirect block), return -1 for error
+int get_block_num_from_block(char *block_data, int index);
+
+// set the block number at specified index(0-127: use in single indirect block) with given block, return 1 for success, 0 for error
+int set_block_num_to_block(char *block_data, int index, int num);
 
 //////// BITMAP OPERATIONS ////////////
 

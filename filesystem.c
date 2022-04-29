@@ -106,14 +106,26 @@ void print_inode(int index);
 // return the size of file with given inode
 int get_size_in_inode(char *inode_data);
 
-// set the size of file to given inode
+// set the size of file to given inode, return 1 for success, 0 for error
 int set_size_in_inode(char *inode_data, int size);
 
 // return the number of blocks with given inode
 int get_blocks_in_inode(char *inode_data);
 
-// set the number of blocks to given inode
+// set the number of blocks to given inode, return 1 for success, 0 for error
 int set_blocks_in_inode(char *inode_data, int blocks);
+
+// return the block number with given inode and direct block(0-11), return -1 for error
+int get_block_num(char *inode_data, int direct_block);
+
+// set the block number at specified direct block with given inode, return 1 for success, 0 for error
+int set_block_num(char *inode_data, int direct_block, int num);
+
+// return the block number with given block and index(0-127: use in single indirect block), return -1 for error
+int get_block_num_from_block(char *block_data, int index);
+
+// set the block number at specified index(0-127: use in single indirect block) with given block, return 1 for success, 0 for error
+int set_block_num_to_block(char *block_data, int index, int num);
 
 typedef struct BitMap
 {
@@ -542,6 +554,84 @@ int set_blocks_in_inode(char *inode_data, int blocks)
             inode_data[i + NUM_BYTES_FOR_SIZE] = blockno[i];
         }
         success = 1;
+    }
+    return success;
+}
+
+int get_block_num(char *inode_data, int direct_block)
+{
+    int blocknum = -1;
+    if (direct_block >= 0 && direct_block < NUM_DIRECT_BLOCK)
+    {
+        char num[NUM_BYTES_PER_ADDRESS];
+        for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
+        {
+            num[i] = inode_data[NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + direct_block * NUM_BYTES_PER_ADDRESS];
+        }
+        blocknum = atoi(num);
+    }
+    return blocknum;
+}
+
+int set_block_num(char *inode_data, int direct_block, int num)
+{
+    int success = 0;
+    if (direct_block >= 0 && direct_block < NUM_DIRECT_BLOCK)
+    {
+        if (num > bitmap.start_block && num <= bitmap.max_block)
+        {
+            char blocknum[NUM_BYTES_PER_ADDRESS];
+            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            {
+                blocknum[i] = '\0';
+            }
+            sprintf(blocknum, "%d", num);
+            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            {
+                inode_data[NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + direct_block * NUM_BYTES_PER_ADDRESS] = blocknum[i];
+            }
+            success = 1;
+        }
+    }
+    return success;
+}
+
+int get_block_num_from_block(char *block_data, int index)
+{
+    int blocknum = -1;
+    const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
+    if (index >= 0 && index < NUM_ADDRESS_PER_BLOCK)
+    {
+        char num[NUM_BYTES_PER_ADDRESS];
+        for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
+        {
+            num[i] = block_data[index * NUM_BYTES_PER_ADDRESS + i];
+        }
+        blocknum = atoi(num);
+    }
+    return blocknum;
+}
+
+int set_block_num_to_block(char *block_data, int index, int num)
+{
+    int success = 0;
+    const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
+    if (index >= 0 && index < NUM_ADDRESS_PER_BLOCK)
+    {
+        if (num > bitmap.start_block && num <= bitmap.max_block)
+        {
+            char blocknum[NUM_BYTES_PER_ADDRESS];
+            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            {
+                blocknum[i] = '\0';
+            }
+            sprintf(blocknum, "%d", num);
+            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            {
+                block_data[index * NUM_BYTES_PER_ADDRESS + i] = blocknum[i];
+            }
+            success = 1;
+        }
     }
     return success;
 }
