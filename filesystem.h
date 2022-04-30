@@ -155,6 +155,9 @@ int get_block_num_from_block(char *block_data, int index);
 // set the block number at specified index(0-127: use in single indirect block) with given block, return 1 for success, 0 for error
 int set_block_num_to_block(char *block_data, int index, int num);
 
+// print opened_files
+void print_opened_files();
+
 //////// BITMAP OPERATIONS ////////////
 
 // write bitmap to disk

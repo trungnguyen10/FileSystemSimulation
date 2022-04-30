@@ -43,6 +43,7 @@ typedef struct DirStruct
     int num_blocks_for_Dir;
     int size;
     char entries[NUM_FILES][ENTRY_SIZE];
+    int opened_files[NUM_FILES];
 } DirStruct;
 
 //////// DIR OPERATIONS ////////////
@@ -55,6 +56,15 @@ int write_entry_to_disk(int index);
 
 // get entry with the given filename, return the index of entry(inode), return -1 when not found
 int get_entry(char *filename);
+
+// add file_no to list of opened files, return 1 on success, 0 on error
+int add_to_opened_files(int file_no);
+
+// delete file_no from the list of opened files, return 1 on success, 0 on error
+int delete_from_opened_files(int file_no);
+
+// check a file with given file_no is opened, return 1 on true, 0 on false
+int is_opened(int file_no);
 
 // return the number of used entry
 int num_used_entries();
@@ -263,6 +273,68 @@ int get_entry(char *filename)
     }
 }
 
+void print_opened_files()
+{
+    for (int i = 0; i < NUM_FILES; i++)
+    {
+        printf("%d ", dir.opened_files[i]);
+    }
+    printf("\n");
+}
+
+int add_to_opened_files(int file_no)
+{
+    int success = 0;
+    if (file_no >= 0 && file_no < NUM_FILES)
+    {
+        for (int i = 0; i < NUM_FILES; i++)
+        {
+            if (dir.opened_files[i] == -1)
+            {
+                dir.opened_files[i] = file_no;
+                success = 1;
+                break;
+            }
+        }
+    }
+    return success;
+}
+
+int delete_from_opened_files(int file_no)
+{
+    int success = 0;
+    if (file_no >= 0 && file_no < NUM_FILES)
+    {
+        for (int i = 0; i < NUM_FILES; i++)
+        {
+            if (dir.opened_files[i] == file_no)
+            {
+                dir.opened_files[i] = -1;
+                success = 1;
+                break;
+            }
+        }
+    }
+    return success;
+}
+
+int is_opened(int file_no)
+{
+    int flag = 0;
+    if (file_no >= 0 && file_no < NUM_FILES)
+    {
+        for (int i = 0; i < NUM_FILES; i++)
+        {
+            if (dir.opened_files[i] == file_no)
+            {
+                flag = 1;
+                break;
+            }
+        }
+    }
+    return flag;
+}
+
 int num_used_entries()
 {
     return dir.size;
@@ -347,6 +419,12 @@ int init_dir()
     dir.start_block = 0;
     dir.num_entries_per_block = SOFTWARE_DISK_BLOCK_SIZE / ENTRY_SIZE; // 8
     dir.num_blocks_for_Dir = NUM_FILES / dir.num_entries_per_block;    // 100
+
+    for (int i = 0; i < NUM_FILES; i++)
+    {
+        dir.opened_files[i] = -1;
+    }
+
     int success = load_dir_from_disk();
     return success;
 }
@@ -382,7 +460,7 @@ int load_inodes_from_disk()
 
 int read_inode(char *buf, int index)
 {
-    if (index < inodes.size && index >= 0)
+    if (index < NUM_FILES && index >= 0)
     {
         for (int k = 0; k < INODE_SIZE; k++)
         {
@@ -402,7 +480,7 @@ int num_used_inodes()
 int write_inode_to_disk(int index)
 {
     int success = 0;
-    if (index < inodes.size && index >= 0)
+    if (index < NUM_FILES && index >= 0)
     {
         char buf[SOFTWARE_DISK_BLOCK_SIZE];
         int target_block_index = (int)(index / inodes.num_inodes_per_block) + inodes.start_block;
@@ -426,7 +504,7 @@ int write_inode_to_disk(int index)
 
 int write_inode(char *data, int index)
 {
-    if (index < inodes.size && index >= 0)
+    if (index < NUM_FILES && index >= 0)
     {
         for (int i = 0; i < INODE_SIZE; i++)
         {
@@ -790,12 +868,21 @@ File open_file(char *name, FileMode mode)
     }
     else
     {
-        fserror = FS_NONE;
-        FileInternals *opened_file = malloc(sizeof(struct FileInternals));
-        opened_file->file_no = f_no;
-        opened_file->cur_pos = 0;
-        opened_file->mode = mode;
-        return opened_file;
+        if (is_opened(f_no))
+        {
+            fserror = FS_FILE_OPEN;
+            return NULL;
+        }
+        else
+        {
+            fserror = FS_NONE;
+            FileInternals *opened_file = malloc(sizeof(struct FileInternals));
+            opened_file->file_no = f_no;
+            add_to_opened_files(f_no);
+            opened_file->cur_pos = 0;
+            opened_file->mode = mode;
+            return opened_file;
+        }
     }
 }
 
@@ -814,6 +901,7 @@ File create_file(char *name)
         fserror = FS_NONE;
         FileInternals *created_file = malloc(sizeof(struct FileInternals));
         created_file->file_no = f_no;
+        add_to_opened_files(f_no);
         created_file->cur_pos = 0;
         created_file->mode = READ_WRITE;
         return created_file;
@@ -823,17 +911,25 @@ File create_file(char *name)
 
 void close_file(File file)
 {
-    free(file);
-    fserror = FS_NONE;
+    // printf("inside close_file\n");
+    // printf("file_no is %ld\n", file->file_no);
+    if (is_opened(file->file_no))
+    {
+        delete_from_opened_files(file->file_no);
+        free(file);
+        fserror = FS_NONE;
+    }
+    else
+        fserror = FS_FILE_NOT_OPEN;
 }
 
 unsigned long read_file(File file, void *buf, unsigned long numbytes)
 {
-    if (file->mode != READ_ONLY || file->mode != READ_WRITE)
+    if (is_opened(file->file_no))
     {
         // get the inode
         char file_inode[INODE_SIZE];
-        int success = write_inode(file_inode, file->file_no);
+        int success = read_inode(file_inode, file->file_no);
         if (!success)
             printf("invalid file number!\n");
 
