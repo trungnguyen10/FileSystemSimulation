@@ -143,7 +143,7 @@ int get_blocks_in_inode(char *inode_data);
 // set the number of blocks to given inode, return 1 for success, 0 for error
 int set_blocks_in_inode(char *inode_data, int blocks);
 
-// return the block number with given inode and direct block(0-11), return -1 for error
+// return the block number with given inode and direct block(0-11), return -1 for error. Can be used to get the block num for single indirect(index = 12)
 int get_block_num(char *inode_data, int direct_block);
 
 // set the block number at specified direct block with given inode, return 1 for success, 0 for error

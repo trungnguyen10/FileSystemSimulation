@@ -88,16 +88,16 @@ int write_inode_to_disk(int index);
 // load the content of the inode at index into buf
 int read_inode(char *buf, int index);
 
-// write data to inode at index
+// write data to inode at index, return 1 for success, 0 for error
 int write_inode(char *data, int index);
 
 // return the number of used inodes
 int num_used_inodes();
 
-// delete an inode at index
+// delete an inode at index, return 1 for success, 0 for error
 int delete_inode(int index);
 
-// add an empty inode at index
+// add an empty inode at index, return 1 for success, 0 for error
 int add_inode(int index);
 
 // print inode at index
@@ -115,7 +115,7 @@ int get_blocks_in_inode(char *inode_data);
 // set the number of blocks to given inode, return 1 for success, 0 for error
 int set_blocks_in_inode(char *inode_data, int blocks);
 
-// return the block number with given inode and direct block(0-11), return -1 for error
+// return the block number with given inode and direct block(0-11), return -1 for error. Can be used to get the block num for single indirect(index = 12)
 int get_block_num(char *inode_data, int direct_block);
 
 // set the block number at specified direct block with given inode, return 1 for success, 0 for error
@@ -561,7 +561,7 @@ int set_blocks_in_inode(char *inode_data, int blocks)
 int get_block_num(char *inode_data, int direct_block)
 {
     int blocknum = -1;
-    if (direct_block >= 0 && direct_block < NUM_DIRECT_BLOCK)
+    if (direct_block >= 0 && direct_block <= NUM_DIRECT_BLOCK)
     {
         char num[NUM_BYTES_PER_ADDRESS];
         for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
@@ -829,6 +829,96 @@ void close_file(File file)
 
 unsigned long read_file(File file, void *buf, unsigned long numbytes)
 {
+    if (file->mode != READ_ONLY || file->mode != READ_WRITE)
+    {
+        // get the inode
+        char file_inode[INODE_SIZE];
+        int success = write_inode(file_inode, file->file_no);
+        if (!success)
+            printf("invalid file number!\n");
+
+        // get file_size from inode
+        int file_size = get_size_in_inode(file_inode);
+
+        // calculate End Of Read (eor) with given numbytes
+        int eor_pos = file->cur_pos + numbytes - 1;
+
+        // calculate EOF
+        int eof_pos = file_size - 1;
+
+        // calculate the final end position for read_file
+        int end_pos = eor_pos < eof_pos ? eor_pos : eof_pos;
+
+        // numnber of bytes read
+        const int num_bytes_read = end_pos - file->cur_pos + 1;
+
+        // calculate the number of blocks will be loaded
+        const int LOADED_BLOCKS = (num_bytes_read - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+
+        // array of block numbers for read_file
+        int indexes[LOADED_BLOCKS];
+
+        if (LOADED_BLOCKS <= NUM_DIRECT_BLOCK)
+        {
+            for (int i = 0; i < LOADED_BLOCKS; i++)
+            {
+                indexes[i] = get_block_num(file_inode, i);
+            }
+        }
+        else
+        {
+            for (int i = 0; i < NUM_DIRECT_BLOCK; i++)
+            {
+                indexes[i] = get_block_num(file_inode, i);
+            }
+
+            // number of blocks left in single indirect
+            int blocks_left = LOADED_BLOCKS - NUM_DIRECT_BLOCK;
+
+            int indirect_block = get_block_num(file_inode, 12);
+            char block_data[SOFTWARE_DISK_BLOCK_SIZE];
+            read_sd_block(block_data, indirect_block);
+            for (int i = 0; i < blocks_left; i++)
+            {
+                indexes[i + NUM_DIRECT_BLOCK] = get_block_num_from_block(block_data, i);
+            }
+        }
+
+        // read data into buf
+        char *charBuf = (char *)buf;
+        if (LOADED_BLOCKS == 1)
+        {
+            char data[SOFTWARE_DISK_BLOCK_SIZE];
+            read_sd_block(data, indexes[0]);
+            for (int i = 0; i < num_bytes_read; i++)
+            {
+                charBuf[i] = data[i];
+            }
+            return num_bytes_read;
+        }
+        else
+        {
+            for (int i = 0; i < LOADED_BLOCKS - 1; i++)
+            {
+                read_sd_block(charBuf + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+            }
+
+            // read the last block
+            char data[SOFTWARE_DISK_BLOCK_SIZE];
+            read_sd_block(data, indexes[LOADED_BLOCKS - 1]);
+            int end_index = end_pos % SOFTWARE_DISK_BLOCK_SIZE;
+            for (int i = 0; i <= end_index; i++)
+            {
+                charBuf[(LOADED_BLOCKS - 1) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
+            }
+            return num_bytes_read;
+        }
+    }
+    else
+    {
+        fserror = FS_FILE_NOT_OPEN;
+        return 0;
+    }
 }
 
 void fs_print_error(void)
