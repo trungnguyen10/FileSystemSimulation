@@ -126,16 +126,17 @@ int get_blocks_in_inode(char *inode_data);
 int set_blocks_in_inode(char *inode_data, int blocks);
 
 // return the block number with given inode and direct block(0-11), return -1 for error. Can be used to get the block num for single indirect(index = 12)
-int get_block_num(char *inode_data, int direct_block);
+int get_direct_block_num(char *inode_data, int index);
 
-// set the block number at specified direct block with given inode, return 1 for success, 0 for error
-int set_block_num(char *inode_data, int direct_block, int num);
+// set the block number at specified direct block(0-11) with given inode, return 1 for success, 0 for error
+// can be used to set block number for single indirect(index = 12)
+int set_direct_block_num(char *inode_data, int direct_block, int num);
 
-// return the block number with given block and index(0-127: use in single indirect block), return -1 for error
-int get_block_num_from_block(char *block_data, int index);
+// return the block number with given block and index(0-139), return -1 for error
+int get_block_num(char *inode_data, int index);
 
-// set the block number at specified index(0-127: use in single indirect block) with given block, return 1 for success, 0 for error
-int set_block_num_to_block(char *block_data, int index, int num);
+// set the block number at specified index(0-139) with given num, return 1 for success, 0 for error
+int set_block_num(char *inodes_data, int index, int num);
 
 typedef struct BitMap
 {
@@ -544,8 +545,8 @@ int add_inode(int index)
             // check if at index is active inode or not
             if (inodes.list_inodes[index][0] == '\0')
             {
-                inodes.list_inodes[index][0] = '0';
-                inodes.list_inodes[index][1] = '0';
+                set_size_in_inode(inodes.list_inodes[index], 0);
+                set_blocks_in_inode(inodes.list_inodes[index], 0);
                 inodes.size++;
                 write_inode_to_disk(index);
                 success = 1;
@@ -636,37 +637,40 @@ int set_blocks_in_inode(char *inode_data, int blocks)
     return success;
 }
 
-int get_block_num(char *inode_data, int direct_block)
+int get_direct_block_num(char *inode_data, int index)
 {
     int blocknum = -1;
-    if (direct_block >= 0 && direct_block <= NUM_DIRECT_BLOCK)
+    if (index >= 0 && index <= NUM_DIRECT_BLOCK)
     {
-        char num[NUM_BYTES_PER_ADDRESS];
+        // extra space for '\0'
+        char num[NUM_BYTES_PER_ADDRESS + 1];
+        num[NUM_BYTES_PER_ADDRESS] = '\0';
         for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
         {
-            num[i] = inode_data[NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + direct_block * NUM_BYTES_PER_ADDRESS];
+            num[i] = inode_data[i + NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + index * NUM_BYTES_PER_ADDRESS];
         }
         blocknum = atoi(num);
     }
     return blocknum;
 }
 
-int set_block_num(char *inode_data, int direct_block, int num)
+int set_direct_block_num(char *inode_data, int direct_block, int num)
 {
     int success = 0;
-    if (direct_block >= 0 && direct_block < NUM_DIRECT_BLOCK)
+    if (direct_block >= 0 && direct_block <= NUM_DIRECT_BLOCK)
     {
         if (num > bitmap.start_block && num <= bitmap.max_block)
         {
-            char blocknum[NUM_BYTES_PER_ADDRESS];
+            // extra space for '\0'
+            char blocknum[NUM_BYTES_PER_ADDRESS + 1];
             for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
             {
                 blocknum[i] = '\0';
             }
             sprintf(blocknum, "%d", num);
-            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
             {
-                inode_data[NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + direct_block * NUM_BYTES_PER_ADDRESS] = blocknum[i];
+                inode_data[NUM_BYTES_FOR_SIZE + NUM_BYTES_FOR_BLOCKS + direct_block * NUM_BYTES_PER_ADDRESS + i] = blocknum[i];
             }
             success = 1;
         }
@@ -674,41 +678,66 @@ int set_block_num(char *inode_data, int direct_block, int num)
     return success;
 }
 
-int get_block_num_from_block(char *block_data, int index)
+int get_block_num(char *inode_data, int index)
 {
     int blocknum = -1;
-    const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
-    if (index >= 0 && index < NUM_ADDRESS_PER_BLOCK)
+
+    if (index < NUM_DIRECT_BLOCK)
+        blocknum = get_direct_block_num(inode_data, index);
+    else
     {
-        char num[NUM_BYTES_PER_ADDRESS];
-        for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
+        int indirect_block_num = get_direct_block_num(inode_data, 12);
+        char block_data[SOFTWARE_DISK_BLOCK_SIZE];
+        read_sd_block(block_data, indirect_block_num);
+        const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
+        index = index - NUM_DIRECT_BLOCK;
+        if (index < NUM_ADDRESS_PER_BLOCK)
         {
-            num[i] = block_data[index * NUM_BYTES_PER_ADDRESS + i];
+            // extra space for '\0'
+            char num[NUM_BYTES_PER_ADDRESS + 1];
+            num[NUM_BYTES_PER_ADDRESS] = '\0';
+            for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
+            {
+                num[i] = block_data[index * NUM_BYTES_PER_ADDRESS + i];
+            }
+            blocknum = atoi(num);
         }
-        blocknum = atoi(num);
     }
     return blocknum;
 }
 
-int set_block_num_to_block(char *block_data, int index, int num)
+int set_block_num(char *inode_data, int index, int num)
 {
     int success = 0;
-    const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
-    if (index >= 0 && index < NUM_ADDRESS_PER_BLOCK)
+    if (index < NUM_DIRECT_BLOCK)
     {
-        if (num > bitmap.start_block && num <= bitmap.max_block)
+        success = set_direct_block_num(inode_data, index, num);
+    }
+    else
+    {
+        const int NUM_ADDRESS_PER_BLOCK = SOFTWARE_DISK_BLOCK_SIZE / NUM_BYTES_PER_ADDRESS;
+        index = index - NUM_DIRECT_BLOCK;
+        if (index < NUM_ADDRESS_PER_BLOCK)
         {
-            char blocknum[NUM_BYTES_PER_ADDRESS];
-            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+            if (num > bitmap.start_block && num <= bitmap.max_block)
             {
-                blocknum[i] = '\0';
+                int indirect_block_num = get_direct_block_num(inode_data, 12);
+                char block_data[SOFTWARE_DISK_BLOCK_SIZE];
+                read_sd_block(block_data, indirect_block_num);
+
+                // extra space for '\0'
+                char blocknum[NUM_BYTES_PER_ADDRESS + 1];
+                for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
+                {
+                    blocknum[i] = '\0';
+                }
+                sprintf(blocknum, "%d", num);
+                for (int i = 0; i < NUM_BYTES_PER_ADDRESS; i++)
+                {
+                    block_data[index * NUM_BYTES_PER_ADDRESS + i] = blocknum[i];
+                }
+                success = write_sd_block(block_data, indirect_block_num);
             }
-            sprintf(blocknum, "%d", num);
-            for (int i = 0; i <= NUM_BYTES_PER_ADDRESS; i++)
-            {
-                block_data[index * NUM_BYTES_PER_ADDRESS + i] = blocknum[i];
-            }
-            success = 1;
         }
     }
     return success;
@@ -719,9 +748,9 @@ int set_block_num_to_block(char *block_data, int index, int num)
 // set bit k_th in bitmap.map
 void set_bit(int k)
 {
-    int i = k % 8;
-    int pos = k / 8;
-    char flag = 1;
+    int i = k / 8;
+    int pos = k % 8;
+    unsigned char flag = 128;
     flag = flag << pos;
     bitmap.map[i] = bitmap.map[i] | flag;
 }
@@ -729,10 +758,10 @@ void set_bit(int k)
 // clear bit k_th in bitmap.map
 void clear_bit(int k)
 {
-    int i = k % 8;
-    int pos = k / 8;
-    char flag = 1;
-    flag = flag << pos;
+    int i = k / 8;
+    int pos = k % 8;
+    unsigned char flag = 128;
+    flag = flag >> pos;
     flag = ~flag;
     bitmap.map[i] = bitmap.map[i] & flag;
 }
@@ -766,7 +795,7 @@ int get_free_block()
     int non_zero_word = 0;
 
     // find non_zero_word and count zero_word
-    for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE; i++)
+    for (int i = 0; i < bitmap.size; i++)
     {
         if (bitmap.map[i] == 0)
             number_zero_word++;
@@ -788,11 +817,14 @@ int get_free_block()
             break;
     }
 
-    int block_number = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block - 1;
+    int block_number = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block;
     if (block_number > 4999)
         return -1;
     else
+    {
+        set_block(block_number);
         return block_number;
+    }
 }
 
 int write_bitmap_to_disk()
@@ -936,78 +968,216 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes)
         // get file_size from inode
         int file_size = get_size_in_inode(file_inode);
 
-        // calculate End Of Read (eor) with given numbytes
-        int eor_pos = file->cur_pos + numbytes - 1;
-
-        // calculate EOF
-        int eof_pos = file_size - 1;
-
-        // calculate the final end position for read_file
-        int end_pos = eor_pos < eof_pos ? eor_pos : eof_pos;
-
-        // numnber of bytes read
-        const int num_bytes_read = end_pos - file->cur_pos + 1;
+        // numbytes to be read
+        int numbytes_read = 0;
+        if ((file->cur_pos + numbytes) <= file_size)
+        {
+            numbytes_read = numbytes;
+        }
+        else
+        {
+            numbytes_read = file_size - file->cur_pos;
+        }
 
         // calculate the number of blocks will be loaded
-        const int LOADED_BLOCKS = (num_bytes_read - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+        const int LOADED_BLOCKS = (file->cur_pos + numbytes_read - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
 
         // array of block numbers for read_file
         int indexes[LOADED_BLOCKS];
 
-        if (LOADED_BLOCKS <= NUM_DIRECT_BLOCK)
-        {
-            for (int i = 0; i < LOADED_BLOCKS; i++)
-            {
-                indexes[i] = get_block_num(file_inode, i);
-            }
-        }
-        else
-        {
-            for (int i = 0; i < NUM_DIRECT_BLOCK; i++)
-            {
-                indexes[i] = get_block_num(file_inode, i);
-            }
+        // start_block index
+        int start_block = file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
+        // end_block index
+        int end_block = start_block + LOADED_BLOCKS - 1;
 
-            // number of blocks left in single indirect
-            int blocks_left = LOADED_BLOCKS - NUM_DIRECT_BLOCK;
-
-            int indirect_block = get_block_num(file_inode, 12);
-            char block_data[SOFTWARE_DISK_BLOCK_SIZE];
-            read_sd_block(block_data, indirect_block);
-            for (int i = 0; i < blocks_left; i++)
-            {
-                indexes[i + NUM_DIRECT_BLOCK] = get_block_num_from_block(block_data, i);
-            }
+        for (int i = start_block; i <= end_block; i++)
+        {
+            indexes[i - start_block] = get_block_num(file_inode, i);
         }
 
         // read data into buf
         char *charBuf = (char *)buf;
+        int cur_pos = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
         if (LOADED_BLOCKS == 1)
         {
             char data[SOFTWARE_DISK_BLOCK_SIZE];
             read_sd_block(data, indexes[0]);
-            for (int i = 0; i < num_bytes_read; i++)
+            for (int i = 0; i < numbytes_read; i++)
             {
-                charBuf[i] = data[i];
+                charBuf[i] = data[cur_pos + i];
             }
-            return num_bytes_read;
+            return numbytes_read;
         }
         else
         {
-            for (int i = 0; i < LOADED_BLOCKS - 1; i++)
+            // handle 1st block
+            char data[SOFTWARE_DISK_BLOCK_SIZE];
+            read_sd_block(data, indexes[0]);
+            for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE - cur_pos; i++)
             {
-                read_sd_block(charBuf + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+                charBuf[i] = data[cur_pos + i];
             }
 
-            // read the last block
-            char data[SOFTWARE_DISK_BLOCK_SIZE];
+            // handle inner blocks
+            int next_pos = SOFTWARE_DISK_BLOCK_SIZE - cur_pos;
+            for (int i = 1; i < LOADED_BLOCKS - 1; i++)
+            {
+                read_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+            }
+
+            // handle last block
             read_sd_block(data, indexes[LOADED_BLOCKS - 1]);
-            int end_index = end_pos % SOFTWARE_DISK_BLOCK_SIZE;
+            int end_index = (cur_pos + numbytes_read - 1) % SOFTWARE_DISK_BLOCK_SIZE;
             for (int i = 0; i <= end_index; i++)
             {
-                charBuf[(LOADED_BLOCKS - 1) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
+                charBuf[next_pos + (LOADED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
             }
-            return num_bytes_read;
+            return numbytes_read;
+        }
+    }
+    else
+    {
+        fserror = FS_FILE_NOT_OPEN;
+        return 0;
+    }
+}
+
+unsigned long write_file(File file, void *buf, unsigned long numbytes)
+{
+    if (is_opened(file->file_no))
+    {
+        if (file->mode == READ_WRITE)
+        {
+            // get file inode
+            char file_inode[INODE_SIZE];
+            read_inode(file_inode, file->file_no);
+
+            // numbytes to be written
+            int numbytes_written = 0;
+            if ((file->cur_pos + numbytes) <= MAX_FILE_SIZE)
+            {
+                fserror = FS_NONE;
+                numbytes_written = numbytes;
+            }
+            else
+            {
+                fserror = FS_EXCEEDS_MAX_FILE_SIZE;
+                numbytes_written = MAX_FILE_SIZE - file->cur_pos;
+            }
+
+            // number of blocks needed for write
+            const int NEEDED_BLOCKS = (file->cur_pos + numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+
+            // array of block numbers for write_file
+            int indexes[NEEDED_BLOCKS];
+
+            int start_block = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
+            int end_block = start_block + NEEDED_BLOCKS - 1;
+            int file_size = get_size_in_inode(file_inode);
+            int eof_block = (file_size - 1) / SOFTWARE_DISK_BLOCK_SIZE;
+
+            // read block number from inode into indexes, may need to allocate new free block
+            if (end_block <= eof_block)
+            {
+                for (int i = start_block; i <= end_block; i++)
+                {
+                    indexes[i - start_block] = get_block_num(file_inode, i);
+                }
+            }
+            else
+            {
+                int cur_num_blocks = get_blocks_in_inode(file_inode);
+                // handle emptry file
+                if (cur_num_blocks == 0)
+                {
+                    for (int i = start_block; i <= end_block; i++)
+                    {
+                        int new_block_num = get_free_block();
+                        set_block_num(file_inode, i, new_block_num);
+                        cur_num_blocks++;
+                        indexes[i - start_block] = new_block_num;
+                    }
+                    set_blocks_in_inode(file_inode, cur_num_blocks);
+                }
+                else
+                {
+                    for (int i = start_block; i <= eof_block; i++)
+                    {
+                        indexes[i - start_block] = get_block_num(file_inode, i);
+                    }
+                    for (int i = eof_block + 1; i <= end_block; i++)
+                    {
+                        int new_block_num = get_free_block();
+                        set_block_num(file_inode, i, new_block_num);
+                        cur_num_blocks++;
+                        indexes[i - start_block] = new_block_num;
+                    }
+                    set_blocks_in_inode(file_inode, cur_num_blocks);
+                }
+            }
+
+            // write data from buf into file
+            char *charBuf = (char *)buf;
+            int cur_pos = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
+            if (NEEDED_BLOCKS == 1)
+            {
+                // read from disk
+                char data[SOFTWARE_DISK_BLOCK_SIZE];
+                read_sd_block(data, indexes[0]);
+
+                // only overwrite needed bytes
+                for (int i = 0; i < numbytes_written; i++)
+                {
+                    data[cur_pos + i] = charBuf[i];
+                }
+
+                // write to disk
+                write_sd_block(data, indexes[0]);
+            }
+            else
+            {
+                // handle 1st block
+                char data[SOFTWARE_DISK_BLOCK_SIZE];
+                read_sd_block(data, indexes[0]);
+                for (int i = cur_pos; i < SOFTWARE_DISK_BLOCK_SIZE; i++)
+                {
+                    data[i] = charBuf[i - cur_pos];
+                }
+                write_sd_block(data, indexes[0]);
+
+                // handle inner blocks, overwrite the whole block
+                int next_pos = SOFTWARE_DISK_BLOCK_SIZE - cur_pos;
+                for (int i = 1; i < NEEDED_BLOCKS - 1; i++)
+                {
+                    write_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+                }
+
+                // handle last block
+                read_sd_block(data, indexes[NEEDED_BLOCKS - 1]);
+                int end_index = (cur_pos + numbytes_written - 1) % SOFTWARE_DISK_BLOCK_SIZE;
+                for (int i = 0; i <= end_index; i++)
+                {
+                    data[i] = charBuf[next_pos + (NEEDED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i];
+                }
+                write_sd_block(data, indexes[NEEDED_BLOCKS - 1]);
+            }
+
+            // update file_size
+            int new_file_size = file->cur_pos + numbytes_written;
+            file_size = file_size > new_file_size ? file_size : new_file_size;
+            set_size_in_inode(file_inode, file_size);
+            write_inode(file_inode, file->file_no);
+
+            // write fs changes to disk
+            write_inode_to_disk(file->file_no);
+            write_bitmap_to_disk();
+
+            return numbytes_written;
+        }
+        else
+        {
+            fserror = FS_FILE_READ_ONLY;
+            return 0;
         }
     }
     else
