@@ -961,8 +961,6 @@ File create_file(char *name)
 
 void close_file(File file)
 {
-    // printf("inside close_file\n");
-    // printf("file_no is %ld\n", file->file_no);
     if (is_opened(file->file_no))
     {
         delete_from_opened_files(file->file_no);
@@ -1070,6 +1068,9 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
             char file_inode[INODE_SIZE];
             read_inode(file_inode, file->file_no);
 
+            // File specs
+            int file_size = get_size_in_inode(file_inode);
+
             // numbytes to be written
             int numbytes_written = 0;
             if ((file->cur_pos + numbytes) <= MAX_FILE_SIZE)
@@ -1083,16 +1084,20 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                 numbytes_written = MAX_FILE_SIZE - file->cur_pos;
             }
 
+            int NEEDED_BLOCKS = 0;
+
             // number of blocks needed for write
-            const int NEEDED_BLOCKS = (file->cur_pos + numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+            if (file_size > 0)
+                NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1 + 1;
+            else
+                NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
 
             // array of block numbers for write_file
             int indexes[NEEDED_BLOCKS];
 
-            int start_block = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
+            int start_block = file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
             int end_block = start_block + NEEDED_BLOCKS - 1;
-            int file_size = get_size_in_inode(file_inode);
-            int eof_block = (file_size - 1) / SOFTWARE_DISK_BLOCK_SIZE;
+            int eof_block = file_size > 0 ? (file_size - 1) / SOFTWARE_DISK_BLOCK_SIZE : 0;
 
             // current number of blocks for file
             int cur_num_blocks = get_blocks_in_inode(file_inode);
@@ -1111,7 +1116,7 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                     }
                     if (i == 12)
                     {
-                        set_direct_block_num(file_inode, 12, new_block_num);
+                        set_direct_block_num(file_inode, i, new_block_num);
                         // get another block in put into indirect block
                         new_block_num = get_free_block();
                         if (new_block_num == -1)
@@ -1123,7 +1128,6 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                     set_block_num(file_inode, i, new_block_num);
                     cur_num_blocks++;
                     indexes[i - start_block] = new_block_num;
-                    printf("block #%d is allocated!\n", indexes[i - start_block]);
                 }
                 set_blocks_in_inode(file_inode, cur_num_blocks);
             }
@@ -1155,7 +1159,7 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                     // when it hits single indirect block in inode
                     if (i == 12)
                     {
-                        set_direct_block_num(file_inode, 12, new_block_num);
+                        set_direct_block_num(file_inode, i, new_block_num);
                         // get another block in put into indirect block
                         new_block_num = get_free_block();
                         if (new_block_num == -1)
@@ -1257,57 +1261,85 @@ int seek_file(File file, unsigned long bytepos)
     { // get file_inode
         char file_inode[INODE_SIZE];
         read_inode(file_inode, file->file_no);
+
         int file_size = get_size_in_inode(file_inode);
-        int eof_pos = (file_size - 1);
-        if (bytepos > eof_pos)
+        int eof_pos = file_size > 0 ? (file_size - 1) : 0;
+
+        int extend_bytes = 0;
+        int needed_blocks = 0;
+
+        // HANDLE EMPTY FILE
+        if (file_size == 0)
         {
-            int extend_bytes = bytepos - eof_pos;
+            extend_bytes = bytepos;
+            needed_blocks = extend_bytes / SOFTWARE_DISK_BLOCK_SIZE + 1;
+        }
+        // WHEN FILE NOT EMPTY
+        else if (bytepos > eof_pos)
+        {
+            extend_bytes = bytepos - eof_pos;
             // reamaing bytes to full block from eof
             int remain_bytes = SOFTWARE_DISK_BLOCK_SIZE - eof_pos % SOFTWARE_DISK_BLOCK_SIZE;
 
             // needed to extend file
-            int needed_blocks = (extend_bytes - remain_bytes) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+            needed_blocks = (extend_bytes - remain_bytes) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+        }
+        else
+        {
+            fserror = FS_NONE;
+            file->cur_pos = bytepos;
+            return 1;
+        }
 
-            // current number of blocks for file
-            int cur_num_blocks = get_blocks_in_inode(file_inode);
-            int start_block = cur_num_blocks - 1;
+        // current number of blocks for file
+        int cur_num_blocks = get_blocks_in_inode(file_inode);
+        int start_block = cur_num_blocks;
 
-            // expected end_block
-            int expected_end_block = start_block + needed_blocks - 1;
-            for (int i = start_block; i <= expected_end_block; i++)
+        // expected end_block
+        int expected_end_block = start_block + needed_blocks - 1;
+        for (int i = start_block; i <= expected_end_block; i++)
+        {
+            int block_num = get_free_block();
+            if (block_num == -1)
             {
-                int block_num = get_free_block();
+                fserror = FS_OUT_OF_SPACE;
+                break;
+            }
+            if (i == 12)
+            {
+                set_direct_block_num(file_inode, i, block_num);
+                // get another block in put into indirect block
+                block_num = get_free_block();
                 if (block_num == -1)
                 {
                     fserror = FS_OUT_OF_SPACE;
                     break;
                 }
-                set_block_num(file_inode, i, block_num);
-                cur_num_blocks++;
             }
-            set_blocks_in_inode(file_inode, cur_num_blocks);
-            if (fserror == FS_OUT_OF_SPACE)
-            {
-                file_size = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE;
-            }
-            else
-            {
-                file_size = bytepos + 1;
-            }
-            // update file_size
-            set_size_in_inode(file_inode, file_size);
-            write_inode(file_inode, file->file_no);
-
-            // write changes to disk
-            write_inode_to_disk(file->file_no);
-            write_bitmap_to_disk();
-            return 1;
+            set_block_num(file_inode, i, block_num);
+            cur_num_blocks++;
+        }
+        set_blocks_in_inode(file_inode, cur_num_blocks);
+        if (fserror == FS_OUT_OF_SPACE)
+        {
+            file_size = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE;
         }
         else
         {
-            file->cur_pos = bytepos;
-            return 1;
+            file_size = bytepos + 1;
         }
+
+        // seek to appropriate position
+        file->cur_pos = file_size - 1;
+
+        // update file_size
+        set_size_in_inode(file_inode, file_size);
+        write_inode(file_inode, file->file_no);
+
+        // write changes to disk
+        write_inode_to_disk(file->file_no);
+        write_bitmap_to_disk();
+        return 1;
     }
     else
         return 0;
