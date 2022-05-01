@@ -97,10 +97,10 @@ int get_entry(char *filename);
 // return the number of used entry
 int num_used_entries();
 
-// delete an entry at index
+// delete an entry at index, remove file from openned file list, also delete corresponding inode, then write changes to disk
 int delete_entry(int index);
 
-// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename
+// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename, then write changes to disk
 int add_entry(char *filename);
 
 // print entry at index
@@ -122,10 +122,10 @@ int write_inode(char *data, int index);
 // return the number of used inodes
 int num_used_inodes();
 
-// delete an inode at index
+// delete an inode at index, return 1 for success, 0 for error, then write changes to disk
 int delete_inode(int index);
 
-// add an empty inode
+// add an empty inode at index, return 1 for success, 0 for error, then write changes to disk
 int add_inode();
 
 // print inode at index

@@ -69,10 +69,10 @@ int is_opened(int file_no);
 // return the number of used entry
 int num_used_entries();
 
-// delete an entry at index
+// delete an entry at index, remove file from openned file list, also delete corresponding inode, then write changes to disk
 int delete_entry(int index);
 
-// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename
+// add an new entry with given filename, return the index of new entry, return -1  max file number exceeded or illegal filename, then write changes to disk
 int add_entry(char *filename);
 
 // print entry at index
@@ -104,10 +104,10 @@ int write_inode(char *data, int index);
 // return the number of used inodes
 int num_used_inodes();
 
-// delete an inode at index, return 1 for success, 0 for error
+// delete an inode at index, return 1 for success, 0 for error, then write changes to disk
 int delete_inode(int index);
 
-// add an empty inode at index, return 1 for success, 0 for error
+// add an empty inode at index, return 1 for success, 0 for error, then write changes to disk
 int add_inode(int index);
 
 // print inode at index
@@ -356,6 +356,9 @@ int delete_entry(int index)
             dir.entries[index][i] = '\0';
         }
 
+        if (is_opened(index))
+            delete_from_opened_files(index);
+
         // update size
         dir.size--;
 
@@ -374,6 +377,16 @@ int add_entry(char *filename)
         // check for illegal file name
         if (filename[0] != '\0')
         {
+            int char_count = 0;
+            while (filename[char_count] != '\0')
+            {
+                char_count++;
+            }
+            if (char_count >= 61)
+            {
+                fserror = FS_ILLEGAL_FILENAME;
+                return -1;
+            }
             int index = 0;
 
             for (; index < NUM_FILES; index++)
@@ -760,7 +773,7 @@ void set_bit(int k)
     int i = k / 8;
     int pos = k % 8;
     unsigned char flag = 128;
-    flag = flag << pos;
+    flag = flag >> pos;
     bitmap.map[i] = bitmap.map[i] | flag;
 }
 
@@ -961,388 +974,485 @@ File create_file(char *name)
 
 void close_file(File file)
 {
-    if (is_opened(file->file_no))
+    if (file != NULL)
     {
-        delete_from_opened_files(file->file_no);
-        free(file);
-        fserror = FS_NONE;
+        if (is_opened(file->file_no))
+        {
+            delete_from_opened_files(file->file_no);
+            free(file);
+            fserror = FS_NONE;
+        }
+        else
+            fserror = FS_FILE_NOT_OPEN;
     }
     else
-        fserror = FS_FILE_NOT_OPEN;
+        fserror = FS_IO_ERROR;
 }
 
 unsigned long read_file(File file, void *buf, unsigned long numbytes)
 {
-    if (is_opened(file->file_no))
+    if (file != NULL)
     {
-        // get the inode
-        char file_inode[INODE_SIZE];
-        int success = read_inode(file_inode, file->file_no);
-        if (!success)
-            printf("invalid file number!\n");
-
-        // get file_size from inode
-        int file_size = get_size_in_inode(file_inode);
-
-        // numbytes to be read
-        int numbytes_read = 0;
-        if ((file->cur_pos + numbytes) <= file_size)
+        if (is_opened(file->file_no))
         {
-            numbytes_read = numbytes;
-        }
-        else
-        {
-            numbytes_read = file_size - file->cur_pos;
-        }
-
-        // calculate the number of blocks will be loaded
-        const int LOADED_BLOCKS = (file->cur_pos + numbytes_read - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
-
-        // array of block numbers for read_file
-        int indexes[LOADED_BLOCKS];
-
-        // start_block index
-        int start_block = file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
-        // end_block index
-        int end_block = start_block + LOADED_BLOCKS - 1;
-
-        for (int i = start_block; i <= end_block; i++)
-        {
-            indexes[i - start_block] = get_block_num(file_inode, i);
-        }
-
-        // read data into buf
-        char *charBuf = (char *)buf;
-        int cur_pos = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
-        if (LOADED_BLOCKS == 1)
-        {
-            char data[SOFTWARE_DISK_BLOCK_SIZE];
-            read_sd_block(data, indexes[0]);
-            for (int i = 0; i < numbytes_read; i++)
-            {
-                charBuf[i] = data[cur_pos + i];
-            }
-            return numbytes_read;
-        }
-        else
-        {
-            // handle 1st block
-            char data[SOFTWARE_DISK_BLOCK_SIZE];
-            read_sd_block(data, indexes[0]);
-            for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE - cur_pos; i++)
-            {
-                charBuf[i] = data[cur_pos + i];
-            }
-
-            // handle inner blocks
-            int next_pos = SOFTWARE_DISK_BLOCK_SIZE - cur_pos;
-            for (int i = 1; i < LOADED_BLOCKS - 1; i++)
-            {
-                read_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
-            }
-
-            // handle last block
-            read_sd_block(data, indexes[LOADED_BLOCKS - 1]);
-            int end_index = (cur_pos + numbytes_read - 1) % SOFTWARE_DISK_BLOCK_SIZE;
-            for (int i = 0; i <= end_index; i++)
-            {
-                charBuf[next_pos + (LOADED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
-            }
-            return numbytes_read;
-        }
-    }
-    else
-    {
-        fserror = FS_FILE_NOT_OPEN;
-        return 0;
-    }
-}
-
-unsigned long write_file(File file, void *buf, unsigned long numbytes)
-{
-    if (is_opened(file->file_no))
-    {
-        if (file->mode == READ_WRITE)
-        {
-            // get file inode
+            // get the inode
             char file_inode[INODE_SIZE];
-            read_inode(file_inode, file->file_no);
+            int success = read_inode(file_inode, file->file_no);
+            if (!success)
+                printf("invalid file number!\n");
 
-            // File specs
+            // get file_size from inode
             int file_size = get_size_in_inode(file_inode);
 
-            // numbytes to be written
-            int numbytes_written = 0;
-            if ((file->cur_pos + numbytes) <= MAX_FILE_SIZE)
+            // numbytes to be read
+            int numbytes_read = 0;
+            if ((file->cur_pos + numbytes) <= file_size)
             {
-                fserror = FS_NONE;
-                numbytes_written = numbytes;
+                numbytes_read = numbytes;
             }
             else
             {
-                fserror = FS_EXCEEDS_MAX_FILE_SIZE;
-                numbytes_written = MAX_FILE_SIZE - file->cur_pos;
+                numbytes_read = file_size - file->cur_pos;
             }
 
-            int NEEDED_BLOCKS = 0;
+            // calculate the number of blocks will be loaded
+            const int LOADED_BLOCKS = (file->cur_pos + numbytes_read - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
 
-            // number of blocks needed for write
-            if (file_size > 0)
-                NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1 + 1;
-            else
-                NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+            // array of block numbers for read_file
+            int indexes[LOADED_BLOCKS];
 
-            // array of block numbers for write_file
-            int indexes[NEEDED_BLOCKS];
-
+            // start_block index
             int start_block = file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
-            int end_block = start_block + NEEDED_BLOCKS - 1;
-            int eof_block = file_size > 0 ? (file_size - 1) / SOFTWARE_DISK_BLOCK_SIZE : 0;
+            // end_block index
+            int end_block = start_block + LOADED_BLOCKS - 1;
 
-            // current number of blocks for file
-            int cur_num_blocks = get_blocks_in_inode(file_inode);
-
-            // read block number from inode into indexes, may need to allocate new free block
-            // handle empty file
-            if (cur_num_blocks == 0)
+            for (int i = start_block; i <= end_block; i++)
             {
-                for (int i = start_block; i <= end_block; i++)
-                {
-                    int new_block_num = get_free_block();
-                    if (new_block_num == -1)
-                    {
-                        fserror = FS_OUT_OF_SPACE;
-                        break;
-                    }
-                    if (i == 12)
-                    {
-                        set_direct_block_num(file_inode, i, new_block_num);
-                        // get another block in put into indirect block
-                        new_block_num = get_free_block();
-                        if (new_block_num == -1)
-                        {
-                            fserror = FS_OUT_OF_SPACE;
-                            break;
-                        }
-                    }
-                    set_block_num(file_inode, i, new_block_num);
-                    cur_num_blocks++;
-                    indexes[i - start_block] = new_block_num;
-                }
-                set_blocks_in_inode(file_inode, cur_num_blocks);
-            }
-            // handle case when start in the middle of the file and write not exceed current file size
-            else if (end_block <= eof_block)
-            {
-                for (int i = start_block; i <= end_block; i++)
-                {
-                    indexes[i - start_block] = get_block_num(file_inode, i);
-                }
-            }
-            // handle case when write exceed current file size
-            else
-            {
-                // get block number of allocated blocks
-                for (int i = start_block; i <= eof_block; i++)
-                {
-                    indexes[i - start_block] = get_block_num(file_inode, i);
-                }
-                // allocate new blocks and put into inode
-                for (int i = eof_block + 1; i <= end_block; i++)
-                {
-                    int new_block_num = get_free_block();
-                    if (new_block_num == -1)
-                    {
-                        fserror = FS_OUT_OF_SPACE;
-                        break;
-                    }
-                    // when it hits single indirect block in inode
-                    if (i == 12)
-                    {
-                        set_direct_block_num(file_inode, i, new_block_num);
-                        // get another block in put into indirect block
-                        new_block_num = get_free_block();
-                        if (new_block_num == -1)
-                        {
-                            fserror = FS_OUT_OF_SPACE;
-                            break;
-                        }
-                    }
-                    set_block_num(file_inode, i, new_block_num);
-                    cur_num_blocks++;
-                    indexes[i - start_block] = new_block_num;
-                }
-                set_blocks_in_inode(file_inode, cur_num_blocks);
+                indexes[i - start_block] = get_block_num(file_inode, i);
             }
 
-            // calculate actual need block in case disk full
-            const int ACTUAL_NEEDED_BLOCKS = cur_num_blocks - file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
-
-            // re-calculate numbytes_written in case disk full
-            if (fserror == FS_OUT_OF_SPACE)
-            {
-                numbytes_written = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE - file->cur_pos;
-            }
-
-            // write data from buf into file
+            // read data into buf
             char *charBuf = (char *)buf;
             int cur_pos = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
-            if (ACTUAL_NEEDED_BLOCKS == 1)
+            if (LOADED_BLOCKS == 1)
             {
-                // read from disk
                 char data[SOFTWARE_DISK_BLOCK_SIZE];
                 read_sd_block(data, indexes[0]);
-
-                // only overwrite needed bytes
-                for (int i = 0; i < numbytes_written; i++)
+                for (int i = 0; i < numbytes_read; i++)
                 {
-                    data[cur_pos + i] = charBuf[i];
+                    charBuf[i] = data[cur_pos + i];
                 }
-
-                // write to disk
-                write_sd_block(data, indexes[0]);
+                return numbytes_read;
             }
             else
             {
                 // handle 1st block
                 char data[SOFTWARE_DISK_BLOCK_SIZE];
                 read_sd_block(data, indexes[0]);
-                for (int i = cur_pos; i < SOFTWARE_DISK_BLOCK_SIZE; i++)
+                for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE - cur_pos; i++)
                 {
-                    data[i] = charBuf[i - cur_pos];
+                    charBuf[i] = data[cur_pos + i];
                 }
-                write_sd_block(data, indexes[0]);
 
-                // handle inner blocks, overwrite the whole block
+                // handle inner blocks
                 int next_pos = SOFTWARE_DISK_BLOCK_SIZE - cur_pos;
-                for (int i = 1; i < ACTUAL_NEEDED_BLOCKS - 1; i++)
+                for (int i = 1; i < LOADED_BLOCKS - 1; i++)
                 {
-                    write_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+                    read_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
                 }
 
                 // handle last block
-                read_sd_block(data, indexes[ACTUAL_NEEDED_BLOCKS - 1]);
-                int end_index = (cur_pos + numbytes_written - 1) % SOFTWARE_DISK_BLOCK_SIZE;
+                read_sd_block(data, indexes[LOADED_BLOCKS - 1]);
+                int end_index = (cur_pos + numbytes_read - 1) % SOFTWARE_DISK_BLOCK_SIZE;
                 for (int i = 0; i <= end_index; i++)
                 {
-                    data[i] = charBuf[next_pos + (ACTUAL_NEEDED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i];
+                    charBuf[next_pos + (LOADED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
                 }
-                write_sd_block(data, indexes[ACTUAL_NEEDED_BLOCKS - 1]);
+                return numbytes_read;
             }
-
-            // update file_size
-            int new_file_size = file->cur_pos + numbytes_written;
-            file_size = file_size > new_file_size ? file_size : new_file_size;
-            set_size_in_inode(file_inode, file_size);
-            write_inode(file_inode, file->file_no);
-
-            // write fs changes to disk
-            write_inode_to_disk(file->file_no);
-            write_bitmap_to_disk();
-
-            return numbytes_written;
         }
         else
         {
-            fserror = FS_FILE_READ_ONLY;
+            fserror = FS_FILE_NOT_OPEN;
             return 0;
         }
     }
     else
     {
-        fserror = FS_FILE_NOT_OPEN;
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+}
+
+unsigned long write_file(File file, void *buf, unsigned long numbytes)
+{
+    if (file != NULL)
+    {
+        if (is_opened(file->file_no))
+        {
+            if (file->mode == READ_WRITE)
+            {
+                // get file inode
+                char file_inode[INODE_SIZE];
+                read_inode(file_inode, file->file_no);
+
+                // File specs
+                int file_size = get_size_in_inode(file_inode);
+
+                // numbytes to be written
+                int numbytes_written = 0;
+                if ((file->cur_pos + numbytes) <= MAX_FILE_SIZE)
+                {
+                    fserror = FS_NONE;
+                    numbytes_written = numbytes;
+                }
+                else
+                {
+                    fserror = FS_EXCEEDS_MAX_FILE_SIZE;
+                    numbytes_written = MAX_FILE_SIZE - file->cur_pos;
+                }
+
+                int NEEDED_BLOCKS = 0;
+
+                // number of blocks needed for write
+                if (file_size > 0)
+                    NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1 + 1;
+                else
+                    NEEDED_BLOCKS = (numbytes_written - 1) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+
+                // array of block numbers for write_file
+                int indexes[NEEDED_BLOCKS];
+
+                int start_block = file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
+                int end_block = start_block + NEEDED_BLOCKS - 1;
+                int eof_block = file_size > 0 ? (file_size - 1) / SOFTWARE_DISK_BLOCK_SIZE : 0;
+
+                // current number of blocks for file
+                int cur_num_blocks = get_blocks_in_inode(file_inode);
+
+                // read block number from inode into indexes, may need to allocate new free block
+                // handle empty file
+                if (cur_num_blocks == 0)
+                {
+                    for (int i = start_block; i <= end_block; i++)
+                    {
+                        int new_block_num = get_free_block();
+                        if (new_block_num == -1)
+                        {
+                            fserror = FS_OUT_OF_SPACE;
+                            break;
+                        }
+                        if (i == 12)
+                        {
+                            set_direct_block_num(file_inode, i, new_block_num);
+                            // get another block in put into indirect block
+                            new_block_num = get_free_block();
+                            if (new_block_num == -1)
+                            {
+                                fserror = FS_OUT_OF_SPACE;
+                                break;
+                            }
+                        }
+                        set_block_num(file_inode, i, new_block_num);
+                        cur_num_blocks++;
+                        indexes[i - start_block] = new_block_num;
+                    }
+                    set_blocks_in_inode(file_inode, cur_num_blocks);
+                }
+                // handle case when start in the middle of the file and write not exceed current file size
+                else if (end_block <= eof_block)
+                {
+                    for (int i = start_block; i <= end_block; i++)
+                    {
+                        indexes[i - start_block] = get_block_num(file_inode, i);
+                    }
+                }
+                // handle case when write exceed current file size
+                else
+                {
+                    // get block number of allocated blocks
+                    for (int i = start_block; i <= eof_block; i++)
+                    {
+                        indexes[i - start_block] = get_block_num(file_inode, i);
+                    }
+                    // allocate new blocks and put into inode
+                    for (int i = eof_block + 1; i <= end_block; i++)
+                    {
+                        int new_block_num = get_free_block();
+                        if (new_block_num == -1)
+                        {
+                            fserror = FS_OUT_OF_SPACE;
+                            break;
+                        }
+                        // when it hits single indirect block in inode
+                        if (i == 12)
+                        {
+                            set_direct_block_num(file_inode, i, new_block_num);
+                            // get another block in put into indirect block
+                            new_block_num = get_free_block();
+                            if (new_block_num == -1)
+                            {
+                                fserror = FS_OUT_OF_SPACE;
+                                break;
+                            }
+                        }
+                        set_block_num(file_inode, i, new_block_num);
+                        cur_num_blocks++;
+                        indexes[i - start_block] = new_block_num;
+                    }
+                    set_blocks_in_inode(file_inode, cur_num_blocks);
+                }
+
+                // calculate actual need block in case disk full
+                const int ACTUAL_NEEDED_BLOCKS = cur_num_blocks - file->cur_pos / SOFTWARE_DISK_BLOCK_SIZE;
+
+                // re-calculate numbytes_written in case disk full
+                if (fserror == FS_OUT_OF_SPACE)
+                {
+                    numbytes_written = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE - file->cur_pos;
+                }
+
+                // write data from buf into file
+                char *charBuf = (char *)buf;
+                int cur_pos = file->cur_pos % SOFTWARE_DISK_BLOCK_SIZE;
+                if (ACTUAL_NEEDED_BLOCKS == 1)
+                {
+                    // read from disk
+                    char data[SOFTWARE_DISK_BLOCK_SIZE];
+                    read_sd_block(data, indexes[0]);
+
+                    // only overwrite needed bytes
+                    for (int i = 0; i < numbytes_written; i++)
+                    {
+                        data[cur_pos + i] = charBuf[i];
+                    }
+
+                    // write to disk
+                    write_sd_block(data, indexes[0]);
+                }
+                else
+                {
+                    // handle 1st block
+                    char data[SOFTWARE_DISK_BLOCK_SIZE];
+                    read_sd_block(data, indexes[0]);
+                    for (int i = cur_pos; i < SOFTWARE_DISK_BLOCK_SIZE; i++)
+                    {
+                        data[i] = charBuf[i - cur_pos];
+                    }
+                    write_sd_block(data, indexes[0]);
+
+                    // handle inner blocks, overwrite the whole block
+                    int next_pos = SOFTWARE_DISK_BLOCK_SIZE - cur_pos;
+                    for (int i = 1; i < ACTUAL_NEEDED_BLOCKS - 1; i++)
+                    {
+                        write_sd_block(charBuf + next_pos + i * SOFTWARE_DISK_BLOCK_SIZE, indexes[i]);
+                    }
+
+                    // handle last block
+                    read_sd_block(data, indexes[ACTUAL_NEEDED_BLOCKS - 1]);
+                    int end_index = (cur_pos + numbytes_written - 1) % SOFTWARE_DISK_BLOCK_SIZE;
+                    for (int i = 0; i <= end_index; i++)
+                    {
+                        data[i] = charBuf[next_pos + (ACTUAL_NEEDED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i];
+                    }
+                    write_sd_block(data, indexes[ACTUAL_NEEDED_BLOCKS - 1]);
+                }
+
+                // update file_size
+                int new_file_size = file->cur_pos + numbytes_written;
+                file_size = file_size > new_file_size ? file_size : new_file_size;
+                set_size_in_inode(file_inode, file_size);
+                write_inode(file_inode, file->file_no);
+
+                // write fs changes to disk
+                write_inode_to_disk(file->file_no);
+                write_bitmap_to_disk();
+
+                return numbytes_written;
+            }
+            else
+            {
+                fserror = FS_FILE_READ_ONLY;
+                return 0;
+            }
+        }
+        else
+        {
+            fserror = FS_FILE_NOT_OPEN;
+            return 0;
+        }
+    }
+    else
+    {
+        fserror = FS_IO_ERROR;
         return 0;
     }
 }
 
 int seek_file(File file, unsigned long bytepos)
 {
-    if (bytepos < MAX_FILE_SIZE)
-    { // get file_inode
-        char file_inode[INODE_SIZE];
-        read_inode(file_inode, file->file_no);
+    if (file != NULL)
+    {
+        if (bytepos < MAX_FILE_SIZE)
+        { // get file_inode
+            char file_inode[INODE_SIZE];
+            read_inode(file_inode, file->file_no);
 
-        int file_size = get_size_in_inode(file_inode);
-        int eof_pos = file_size > 0 ? (file_size - 1) : 0;
+            int file_size = get_size_in_inode(file_inode);
+            int eof_pos = file_size > 0 ? (file_size - 1) : 0;
 
-        int extend_bytes = 0;
-        int needed_blocks = 0;
+            int extend_bytes = 0;
+            int needed_blocks = 0;
 
-        // HANDLE EMPTY FILE
-        if (file_size == 0)
-        {
-            extend_bytes = bytepos;
-            needed_blocks = extend_bytes / SOFTWARE_DISK_BLOCK_SIZE + 1;
-        }
-        // WHEN FILE NOT EMPTY
-        else if (bytepos > eof_pos)
-        {
-            extend_bytes = bytepos - eof_pos;
-            // reamaing bytes to full block from eof
-            int remain_bytes = SOFTWARE_DISK_BLOCK_SIZE - eof_pos % SOFTWARE_DISK_BLOCK_SIZE;
-
-            // needed to extend file
-            needed_blocks = (extend_bytes - remain_bytes) / SOFTWARE_DISK_BLOCK_SIZE + 1;
-        }
-        else
-        {
-            fserror = FS_NONE;
-            file->cur_pos = bytepos;
-            return 1;
-        }
-
-        // current number of blocks for file
-        int cur_num_blocks = get_blocks_in_inode(file_inode);
-        int start_block = cur_num_blocks;
-
-        // expected end_block
-        int expected_end_block = start_block + needed_blocks - 1;
-        for (int i = start_block; i <= expected_end_block; i++)
-        {
-            int block_num = get_free_block();
-            if (block_num == -1)
+            // HANDLE EMPTY FILE
+            if (file_size == 0)
             {
-                fserror = FS_OUT_OF_SPACE;
-                break;
+                extend_bytes = bytepos;
+                needed_blocks = extend_bytes / SOFTWARE_DISK_BLOCK_SIZE + 1;
             }
-            if (i == 12)
+            // WHEN FILE NOT EMPTY
+            else if (bytepos > eof_pos)
             {
-                set_direct_block_num(file_inode, i, block_num);
-                // get another block in put into indirect block
-                block_num = get_free_block();
+                extend_bytes = bytepos - eof_pos;
+                // reamaing bytes to full block from eof
+                int remain_bytes = SOFTWARE_DISK_BLOCK_SIZE - eof_pos % SOFTWARE_DISK_BLOCK_SIZE;
+
+                // needed to extend file
+                needed_blocks = (extend_bytes - remain_bytes) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+            }
+            else
+            {
+                fserror = FS_NONE;
+                file->cur_pos = bytepos;
+                return 1;
+            }
+
+            // current number of blocks for file
+            int cur_num_blocks = get_blocks_in_inode(file_inode);
+            int start_block = cur_num_blocks;
+
+            // expected end_block
+            int expected_end_block = start_block + needed_blocks - 1;
+            for (int i = start_block; i <= expected_end_block; i++)
+            {
+                int block_num = get_free_block();
                 if (block_num == -1)
                 {
                     fserror = FS_OUT_OF_SPACE;
                     break;
                 }
+                if (i == 12)
+                {
+                    set_direct_block_num(file_inode, i, block_num);
+                    // get another block in put into indirect block
+                    block_num = get_free_block();
+                    if (block_num == -1)
+                    {
+                        fserror = FS_OUT_OF_SPACE;
+                        break;
+                    }
+                }
+                set_block_num(file_inode, i, block_num);
+                cur_num_blocks++;
             }
-            set_block_num(file_inode, i, block_num);
-            cur_num_blocks++;
-        }
-        set_blocks_in_inode(file_inode, cur_num_blocks);
-        if (fserror == FS_OUT_OF_SPACE)
-        {
-            file_size = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE;
+            set_blocks_in_inode(file_inode, cur_num_blocks);
+            if (fserror == FS_OUT_OF_SPACE)
+            {
+                file_size = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE;
+            }
+            else
+            {
+                file_size = bytepos + 1;
+            }
+
+            // seek to appropriate position
+            file->cur_pos = file_size - 1;
+
+            // update file_size
+            set_size_in_inode(file_inode, file_size);
+            write_inode(file_inode, file->file_no);
+
+            // write changes to disk
+            write_inode_to_disk(file->file_no);
+            write_bitmap_to_disk();
+            return 1;
         }
         else
         {
-            file_size = bytepos + 1;
+            fserror = FS_EXCEEDS_MAX_FILE_SIZE;
+            return 0;
         }
-
-        // seek to appropriate position
-        file->cur_pos = file_size - 1;
-
-        // update file_size
-        set_size_in_inode(file_inode, file_size);
-        write_inode(file_inode, file->file_no);
-
-        // write changes to disk
-        write_inode_to_disk(file->file_no);
-        write_bitmap_to_disk();
-        return 1;
     }
     else
+    {
+        fserror = FS_IO_ERROR;
         return 0;
+    }
+}
+
+unsigned long file_length(File file)
+{
+    if (file != NULL)
+    {
+        char file_inode[INODE_SIZE];
+        int success = read_inode(file_inode, file->file_no);
+        if (success)
+            fserror = FS_NONE;
+        else
+            fserror = FS_IO_ERROR;
+        return get_size_in_inode(file_inode);
+    }
+    else
+    {
+        fserror = FS_IO_ERROR;
+        return 0;
+    }
+}
+
+int delete_file(char *name)
+{
+    int success = 0;
+    int file_no = get_entry(name);
+    if (file_no != -1)
+    {
+        // get file_inode
+        char file_inode[INODE_SIZE];
+        read_inode(file_inode, file_no);
+        int num_blocks = get_blocks_in_inode(file_inode);
+
+        // handle empty file
+        if (num_blocks == 0)
+        {
+            delete_entry(file_no);
+        }
+        else
+        {
+            char empty_data[SOFTWARE_DISK_BLOCK_SIZE];
+            for (int i = 0; i < SOFTWARE_DISK_BLOCK_SIZE; i++)
+            {
+                empty_data[i] = '\0';
+            }
+
+            // wipe out data and free the blocks
+            for (int i = 0; i < num_blocks; i++)
+            {
+                int block_num = get_block_num(file_inode, i);
+                free_block(block_num);
+                write_sd_block(empty_data, block_num);
+            }
+            delete_entry(file_no);
+
+            // write changes to disk
+            write_bitmap_to_disk();
+        }
+
+        success = 1;
+    }
+    else
+    {
+        fserror = FS_FILE_NOT_FOUND;
+    }
+    return success;
 }
 
 void fs_print_error(void)
