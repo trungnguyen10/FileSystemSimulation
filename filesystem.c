@@ -143,10 +143,14 @@ typedef struct BitMap
     int start_block;
     int max_block;
     int size;
-    char map[SOFTWARE_DISK_BLOCK_SIZE];
+    int blocks_for_map;
+    char *map;
 } BitMap;
 
 //////// BITMAP OPERATIONS ////////////
+
+// init bitmap
+int init_bitmap();
 
 // write bitmap to disk
 int write_bitmap_to_disk();
@@ -193,6 +197,7 @@ void print_specs()
     printf("bitmap start_block %d\n", bitmap.start_block);
     printf("bitmap max_block %d\n", bitmap.max_block);
     printf("bitmap size %d\n", bitmap.size);
+    printf("Number of blocks for bitmap %d\n", bitmap.blocks_for_map);
 }
 
 ////////////// DIR OPERATIONS DEFINITION //////////////
@@ -560,7 +565,10 @@ void print_inode(int index)
 {
     for (int i = 0; i < INODE_SIZE; i++)
     {
-        printf("%c", inodes.list_inodes[index][i]);
+        if (i == 6 || i == 10)
+            printf("%c |", inodes.list_inodes[index][i]);
+        else
+            printf("%c", inodes.list_inodes[index][i]);
     }
     printf("\n");
 }
@@ -572,13 +580,6 @@ int init_inodes()
     inodes.num_inodes_per_block = SOFTWARE_DISK_BLOCK_SIZE / INODE_SIZE;    // 8
     inodes.num_blocks_for_inodes = NUM_FILES / inodes.num_inodes_per_block; // 100
     int success = load_inodes_from_disk();
-
-    // load single indirect mapping to inodes
-    for (int i = 0; i < NUM_FILES; i++)
-    {
-        int block_num = i + dir.num_blocks_for_Dir + inodes.num_blocks_for_inodes;
-        set_direct_block_num(inodes.list_inodes[i], 12, block_num);
-    }
 
     return success;
 }
@@ -842,17 +843,26 @@ int write_bitmap_to_disk()
 
 int load_bitmap_from_disk()
 {
-    return read_sd_block(bitmap.map, (unsigned long)bitmap.start_block);
+    int success = 0;
+    for (int i = 0; i < bitmap.blocks_for_map; i++)
+    {
+        success = read_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block);
+        if (!success)
+            break;
+    }
+    return success;
 }
 
 // init bitmap structure
 int init_bitmap()
 {
     int success = 0;
-    bitmap.start_block = dir.num_blocks_for_Dir + inodes.num_blocks_for_inodes + NUM_FILES;
+    bitmap.start_block = dir.num_blocks_for_Dir + inodes.num_blocks_for_inodes;
     bitmap.max_block = 4999;
     int num_blocks = 5000 - bitmap.start_block - 1;
     bitmap.size = (num_blocks % 8) == 0 ? num_blocks / 8 : num_blocks / 8 + 1;
+    bitmap.map = malloc(bitmap.size);
+    bitmap.blocks_for_map = (bitmap.size & SOFTWARE_DISK_BLOCK_SIZE) == 0 ? bitmap.size / SOFTWARE_DISK_BLOCK_SIZE : bitmap.size / SOFTWARE_DISK_BLOCK_SIZE + 1;
     // NO file exists, every block is available, set all to 1
     if (inodes.size == 0)
     {
@@ -862,10 +872,10 @@ int init_bitmap()
         }
         success = 1;
     }
-    else
-    {
-        success = load_bitmap_from_disk();
-    }
+    // else
+    // {
+    //     success = load_bitmap_from_disk();
+    // }
 
     return success;
 }
@@ -1099,13 +1109,25 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                         fserror = FS_OUT_OF_SPACE;
                         break;
                     }
+                    if (i == 12)
+                    {
+                        set_direct_block_num(file_inode, 12, new_block_num);
+                        // get another block in put into indirect block
+                        new_block_num = get_free_block();
+                        if (new_block_num == -1)
+                        {
+                            fserror = FS_OUT_OF_SPACE;
+                            break;
+                        }
+                    }
                     set_block_num(file_inode, i, new_block_num);
                     cur_num_blocks++;
                     indexes[i - start_block] = new_block_num;
+                    printf("block #%d is allocated!\n", indexes[i - start_block]);
                 }
                 set_blocks_in_inode(file_inode, cur_num_blocks);
             }
-            // handle case when write not exceed current file size
+            // handle case when start in the middle of the file and write not exceed current file size
             else if (end_block <= eof_block)
             {
                 for (int i = start_block; i <= end_block; i++)
@@ -1113,14 +1135,15 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                     indexes[i - start_block] = get_block_num(file_inode, i);
                 }
             }
-            // handle case when write exceed current file siz
+            // handle case when write exceed current file size
             else
             {
-
+                // get block number of allocated blocks
                 for (int i = start_block; i <= eof_block; i++)
                 {
                     indexes[i - start_block] = get_block_num(file_inode, i);
                 }
+                // allocate new blocks and put into inode
                 for (int i = eof_block + 1; i <= end_block; i++)
                 {
                     int new_block_num = get_free_block();
@@ -1128,6 +1151,18 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
                     {
                         fserror = FS_OUT_OF_SPACE;
                         break;
+                    }
+                    // when it hits single indirect block in inode
+                    if (i == 12)
+                    {
+                        set_direct_block_num(file_inode, 12, new_block_num);
+                        // get another block in put into indirect block
+                        new_block_num = get_free_block();
+                        if (new_block_num == -1)
+                        {
+                            fserror = FS_OUT_OF_SPACE;
+                            break;
+                        }
                     }
                     set_block_num(file_inode, i, new_block_num);
                     cur_num_blocks++;
@@ -1214,6 +1249,68 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
         fserror = FS_FILE_NOT_OPEN;
         return 0;
     }
+}
+
+int seek_file(File file, unsigned long bytepos)
+{
+    if (bytepos < MAX_FILE_SIZE)
+    { // get file_inode
+        char file_inode[INODE_SIZE];
+        read_inode(file_inode, file->file_no);
+        int file_size = get_size_in_inode(file_inode);
+        int eof_pos = (file_size - 1);
+        if (bytepos > eof_pos)
+        {
+            int extend_bytes = bytepos - eof_pos;
+            // reamaing bytes to full block from eof
+            int remain_bytes = SOFTWARE_DISK_BLOCK_SIZE - eof_pos % SOFTWARE_DISK_BLOCK_SIZE;
+
+            // needed to extend file
+            int needed_blocks = (extend_bytes - remain_bytes) / SOFTWARE_DISK_BLOCK_SIZE + 1;
+
+            // current number of blocks for file
+            int cur_num_blocks = get_blocks_in_inode(file_inode);
+            int start_block = cur_num_blocks - 1;
+
+            // expected end_block
+            int expected_end_block = start_block + needed_blocks - 1;
+            for (int i = start_block; i <= expected_end_block; i++)
+            {
+                int block_num = get_free_block();
+                if (block_num == -1)
+                {
+                    fserror = FS_OUT_OF_SPACE;
+                    break;
+                }
+                set_block_num(file_inode, i, block_num);
+                cur_num_blocks++;
+            }
+            set_blocks_in_inode(file_inode, cur_num_blocks);
+            if (fserror == FS_OUT_OF_SPACE)
+            {
+                file_size = cur_num_blocks * SOFTWARE_DISK_BLOCK_SIZE;
+            }
+            else
+            {
+                file_size = bytepos + 1;
+            }
+            // update file_size
+            set_size_in_inode(file_inode, file_size);
+            write_inode(file_inode, file->file_no);
+
+            // write changes to disk
+            write_inode_to_disk(file->file_no);
+            write_bitmap_to_disk();
+            return 1;
+        }
+        else
+        {
+            file->cur_pos = bytepos;
+            return 1;
+        }
+    }
+    else
+        return 0;
 }
 
 void fs_print_error(void)
