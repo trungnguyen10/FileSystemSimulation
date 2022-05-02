@@ -143,7 +143,7 @@ typedef struct BitMap
     int max_block;
     int size;
     int blocks_for_map;
-    char *map;
+    char map[600];
 } BitMap;
 
 //////// BITMAP OPERATIONS ////////////
@@ -174,7 +174,7 @@ int get_free_block();
 static InodesStruct inodes;
 static DirStruct dir;
 static BitMap bitmap;
-static int is_init = 0;
+int is_init = 0;
 
 FSError fserror;
 
@@ -792,7 +792,7 @@ int free_block(int index)
 {
     if (index > bitmap.start_block && index <= bitmap.max_block)
     {
-        int k = index - bitmap.start_block - 1;
+        int k = index - bitmap.start_block - 2;
         set_bit(k);
         return 1;
     }
@@ -803,7 +803,7 @@ int set_block(int index)
 {
     if (index > bitmap.start_block && index <= bitmap.max_block)
     {
-        int k = index - bitmap.start_block - 1;
+        int k = index - bitmap.start_block - 2;
         clear_bit(k);
         return 1;
     }
@@ -839,7 +839,7 @@ int get_free_block()
             break;
     }
 
-    int block_number = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block;
+    int block_number = (WORD_SIZE * number_zero_word + offset) + bitmap.start_block + 1;
     if (block_number > 4999)
         return -1;
     else
@@ -851,7 +851,14 @@ int get_free_block()
 
 int write_bitmap_to_disk()
 {
-    return write_sd_block(bitmap.map, (unsigned long)bitmap.start_block);
+    int success = 0;
+    for (int i = 0; i < bitmap.blocks_for_map; i++)
+    {
+        success = write_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
+        if (!success)
+            break;
+    }
+    return success;
 }
 
 int load_bitmap_from_disk()
@@ -859,7 +866,7 @@ int load_bitmap_from_disk()
     int success = 0;
     for (int i = 0; i < bitmap.blocks_for_map; i++)
     {
-        success = read_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block);
+        success = read_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
         if (!success)
             break;
     }
@@ -874,7 +881,6 @@ int init_bitmap()
     bitmap.max_block = 4999;
     int num_blocks = 5000 - bitmap.start_block - 1;
     bitmap.size = (num_blocks % 8) == 0 ? num_blocks / 8 : num_blocks / 8 + 1;
-    bitmap.map = malloc(bitmap.size);
     bitmap.blocks_for_map = (bitmap.size & SOFTWARE_DISK_BLOCK_SIZE) == 0 ? bitmap.size / SOFTWARE_DISK_BLOCK_SIZE : bitmap.size / SOFTWARE_DISK_BLOCK_SIZE + 1;
     // NO file exists, every block is available, set all to 1
     if (inodes.size == 0)
