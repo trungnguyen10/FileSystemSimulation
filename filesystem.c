@@ -852,9 +852,14 @@ int get_free_block()
 int write_bitmap_to_disk()
 {
     int success = 0;
+    char temp[1024];
+    for (int i = 0; i < 600; i++)
+    {
+        temp[i] = bitmap.map[i];
+    }
     for (int i = 0; i < bitmap.blocks_for_map; i++)
     {
-        success = write_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
+        success = write_sd_block(temp + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
         if (!success)
             break;
     }
@@ -864,11 +869,17 @@ int write_bitmap_to_disk()
 int load_bitmap_from_disk()
 {
     int success = 0;
+    char temp[1024];
+
     for (int i = 0; i < bitmap.blocks_for_map; i++)
     {
-        success = read_sd_block(bitmap.map + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
+        success = read_sd_block(temp + i * SOFTWARE_DISK_BLOCK_SIZE, (unsigned long)bitmap.start_block + i);
         if (!success)
             break;
+    }
+    for (int i = 0; i < 600; i++)
+    {
+        bitmap.map[i] = temp[i];
     }
     return success;
 }
@@ -1096,12 +1107,13 @@ unsigned long read_file(File file, void *buf, unsigned long numbytes)
 
                 // handle last block
                 read_sd_block(data, indexes[LOADED_BLOCKS - 1]);
-                int end_index = (numbytes_read - next_pos) % SOFTWARE_DISK_BLOCK_SIZE;
+                int end_pos = (numbytes_read - next_pos) % SOFTWARE_DISK_BLOCK_SIZE;
+                int end_index = end_pos == 0 ? SOFTWARE_DISK_BLOCK_SIZE : end_pos;
                 for (int i = 0; i < end_index; i++)
                 {
                     charBuf[next_pos + (LOADED_BLOCKS - 2) * SOFTWARE_DISK_BLOCK_SIZE + i] = data[i];
                 }
-                charBuf[numbytes_read] = '\0';
+                file->cur_pos = file->cur_pos + numbytes_read;
                 return numbytes_read;
             }
         }
