@@ -52,8 +52,6 @@ Mkfile.old
 dkms.conf
 sdprivate.sd
 trysd.c
-test4a.c
-test4b.c
-test0.c
+[test]*
 formatfs.c
 /.vscode
