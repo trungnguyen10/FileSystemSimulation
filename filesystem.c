@@ -1143,7 +1143,6 @@ unsigned long write_file(File file, void *buf, unsigned long numbytes)
         {
             if (file->mode == READ_WRITE)
             {
-                printf("CURRENT POSITION %ld\n", file->cur_pos);
                 // get file inode
                 char file_inode[INODE_SIZE];
                 read_inode(file_inode, file->file_no);
