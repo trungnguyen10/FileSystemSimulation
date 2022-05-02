@@ -143,7 +143,7 @@ typedef struct BitMap
     int max_block;
     int size;
     int blocks_for_map;
-    char map[600];
+    char *map;
 } BitMap;
 
 //////// BITMAP OPERATIONS ////////////
@@ -852,8 +852,8 @@ int get_free_block()
 int write_bitmap_to_disk()
 {
     int success = 0;
-    char temp[1024];
-    for (int i = 0; i < 600; i++)
+    char temp[bitmap.blocks_for_map * SOFTWARE_DISK_BLOCK_SIZE];
+    for (int i = 0; i < bitmap.size; i++)
     {
         temp[i] = bitmap.map[i];
     }
@@ -869,7 +869,7 @@ int write_bitmap_to_disk()
 int load_bitmap_from_disk()
 {
     int success = 0;
-    char temp[1024];
+    char temp[bitmap.blocks_for_map * SOFTWARE_DISK_BLOCK_SIZE];
 
     for (int i = 0; i < bitmap.blocks_for_map; i++)
     {
@@ -877,7 +877,7 @@ int load_bitmap_from_disk()
         if (!success)
             break;
     }
-    for (int i = 0; i < 600; i++)
+    for (int i = 0; i < bitmap.size; i++)
     {
         bitmap.map[i] = temp[i];
     }
@@ -892,6 +892,9 @@ int init_bitmap()
     bitmap.max_block = 4999;
     int num_blocks = 5000 - bitmap.start_block - 1;
     bitmap.size = (num_blocks % 8) == 0 ? num_blocks / 8 : num_blocks / 8 + 1;
+    // allocate bitmap.map
+    free(bitmap.map);
+    bitmap.map = malloc(bitmap.size);
     bitmap.blocks_for_map = (bitmap.size & SOFTWARE_DISK_BLOCK_SIZE) == 0 ? bitmap.size / SOFTWARE_DISK_BLOCK_SIZE : bitmap.size / SOFTWARE_DISK_BLOCK_SIZE + 1;
     // NO file exists, every block is available, set all to 1
     if (inodes.size == 0)
